@@ -8,7 +8,7 @@ import {
   FileText,
 } from "lucide-react";
 
-function ActivePolls({ polls }) {
+function ActivePolls({ polls, onViewPoll }) {
   return (
     <div className="dashboard-content">
       <section className="welcome-section">
@@ -102,11 +102,9 @@ function ActivePolls({ polls }) {
                   <button
                     className="text-button"
                     type="button"
-                    onClick={() =>
-                      alert("The voting and results page will be added next.")
-                    }
+                    onClick={() => onViewPoll(poll)}
                   >
-                    View poll <ArrowUpRight size={15} />
+                    View Poll <ArrowUpRight size={15} />
                   </button>
                 </div>
               </article>
