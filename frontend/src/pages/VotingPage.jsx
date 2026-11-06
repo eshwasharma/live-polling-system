@@ -8,7 +8,14 @@ import {
   Check,
 } from "lucide-react";
 
-function VotingPage({ poll, onBack, onSubmitVote, hasVoted }) {
+function VotingPage({
+  poll,
+  onBack,
+  onSubmitVote,
+  hasVoted,
+  onViewResults,
+  canViewResults,
+}) {
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [message, setMessage] = useState("");
 
@@ -121,14 +128,26 @@ function VotingPage({ poll, onBack, onSubmitVote, hasVoted }) {
             </div>
 
             {hasVoted ? (
-              <div className="vote-success-message">
-                <CheckCircle2 size={20} />
-                <div>
-                  <strong>Your vote has been submitted!</strong>
-                  <p>Thank you for participating in this poll.</p>
-                </div>
-              </div>
-            ) : (
+  <>
+    <div className="vote-success-message">
+      <CheckCircle2 size={20} />
+      <div>
+        <strong>Your vote has been submitted!</strong>
+        <p>Thank you for participating in this poll.</p>
+      </div>
+    </div>
+
+    {canViewResults && (
+      <button
+        type="button"
+        className="primary-button submit-vote-button"
+        onClick={onViewResults}
+      >
+        View Results
+      </button>
+    )}
+  </>
+) : (
               <>
                 {message && (
                   <p className="vote-validation-message">{message}</p>

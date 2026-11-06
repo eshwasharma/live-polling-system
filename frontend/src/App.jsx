@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import CreatePoll from "./pages/CreatePoll";
 import ActivePolls from "./pages/ActivePolls";
 import VotingPage from "./pages/VotingPage";
+import ResultsPage from "./pages/ResultsPage";
 import "./App.css";
 
 function App() {
@@ -60,10 +61,36 @@ function App() {
     (poll) => poll.id === selectedPoll?.id
   );
 
+  function canViewResults(poll) {
+    if (!poll) return false;
+
+    if (poll.showResults === "always") {
+      return true;
+    }
+
+    if (poll.showResults === "after-voting") {
+      return votedPollIds.includes(poll.id);
+    }
+
+    if (poll.showResults === "after-end") {
+      return poll.endTime && new Date(poll.endTime).getTime() <= Date.now();
+    }
+
+    return false;
+  }
+
+  function handleViewResults() {
+    setActivePage("Results");
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
-        activePage={activePage === "Vote" ? "Active Polls" : activePage}
+        activePage={
+          activePage === "Vote" || activePage === "Results"
+            ? "Active Polls"
+            : activePage
+        }
         onNavigate={handleNavigation}
       />
 
@@ -89,13 +116,24 @@ function App() {
             onBack={() => setActivePage("Active Polls")}
             onSubmitVote={handleSubmitVote}
             hasVoted={votedPollIds.includes(currentPoll.id)}
+            onViewResults={handleViewResults}
+            canViewResults={canViewResults(currentPoll)}
+          />
+        )}
+
+        {activePage === "Results" && currentPoll && (
+          <ResultsPage
+            poll={currentPoll}
+            onBack={() => setActivePage("Active Polls")}
+            canViewResults={canViewResults(currentPoll)}
           />
         )}
 
         {activePage !== "Dashboard" &&
           activePage !== "Create Poll" &&
           activePage !== "Active Polls" &&
-          activePage !== "Vote" && (
+          activePage !== "Vote" &&
+          activePage !== "Results" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>
               <p className="welcome-description">
