@@ -61,6 +61,7 @@ function CreatePoll({ onPublish }) {
   const [endTime, setEndTime] = useState("");
   const [linkExpiration, setLinkExpiration] = useState("never");
   const [successMessage, setSuccessMessage] = useState("");
+  const [isPublishing, setIsPublishing] = useState(false);
 
   const filteredTemplates =
     templateCategory === "All"
@@ -108,8 +109,11 @@ function CreatePoll({ onPublish }) {
     setCreationMode("editor");
   }
 
-  function publishPoll(event) {
+  
+async function publishPoll(event) {
   event.preventDefault();
+
+  if (isPublishing) return;
 
   const validOptions = options
     .map((option) => option.trim())
@@ -125,8 +129,10 @@ function CreatePoll({ onPublish }) {
     return;
   }
 
+  setIsPublishing(true);
+  setSuccessMessage("");
+
   const newPoll = {
-    id: Date.now().toString(),
     title: title.trim(),
     description: description.trim(),
     options: validOptions,
@@ -136,13 +142,19 @@ function CreatePoll({ onPublish }) {
     startTime,
     endTime,
     linkExpiration,
-    status: "Active",
-    votes: 0,
-    createdAt: new Date().toISOString(),
   };
 
-  onPublish(newPoll);
+  try {
+    await onPublish(newPoll);
+  } catch (error) {
+    setSuccessMessage(
+      error.message || "Failed to publish poll. Please try again."
+    );
+  } finally {
+    setIsPublishing(false);
+  }
 }
+
   function goBack() {
     setCreationMode("choose");
     setSuccessMessage("");
@@ -558,9 +570,14 @@ function CreatePoll({ onPublish }) {
               <span className="publish-status-dot"></span>
               Draft · Not published
             </div>
-            <button type="submit" className="primary-button">
-              Publish Poll <ArrowRight size={16} />
-            </button>
+            <button
+  type="submit"
+  className="primary-button"
+  disabled={isPublishing}
+>
+  {isPublishing ? "Publishing..." : "Publish Poll"}
+  {!isPublishing && <ArrowRight size={16} />}
+</button>
           </div>
 
           {successMessage && (

@@ -13,10 +13,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func main() {
@@ -53,35 +54,59 @@ func main() {
 		}
 	}()
 
-// Select database and collections.
-database := client.Database("pulsepoll")
+	// Select database and collections.
+	database := client.Database("pulsepoll")
 
-pollCollection := database.Collection("polls")
-voteCollection := database.Collection("votes")
+	pollCollection := database.Collection("polls")
+	voteCollection := database.Collection("votes")
 
-// Prevent the same browser from voting twice in the same poll.
-voteIndex := mongo.IndexModel{
-	Keys: bson.D{
-		{Key: "pollId", Value: 1},
-		{Key: "voterId", Value: 1},
-	},
-	Options: options.Index().SetUnique(true),
-}
+	// Prevent the same browser from voting twice in the same poll.
+	voteIndex := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "pollId", Value: 1},
+			{Key: "voterId", Value: 1},
+		},
+		Options: options.Index().SetUnique(true),
+	}
 
-_, err = voteCollection.Indexes().CreateOne(
-	context.Background(),
-	voteIndex,
-)
+	_, err = voteCollection.Indexes().CreateOne(
+		context.Background(),
+		voteIndex,
+	)
 
-if err != nil {
-	log.Fatal("Failed to create vote index: ", err)
-}
+	if err != nil {
+		log.Fatal("Failed to create vote index: ", err)
+	}
 
-log.Println("Vote duplicate-protection index created successfully!")
+	log.Println("Vote duplicate-protection index created successfully!")
 
-// Connect MongoDB collections to controllers.
-controllers.SetPollCollection(pollCollection)
-controllers.SetVoteCollection(voteCollection)
+	// Connect MongoDB collections to controllers.
+	controllers.SetPollCollection(pollCollection)
+	controllers.SetVoteCollection(voteCollection)
+
+	// Connect to Redis.
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	// Verify Redis connection.
+	redisCtx, redisCancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	if err := redisClient.Ping(redisCtx).Err(); err != nil {
+		redisCancel()
+		log.Fatal("Redis connection failed: ", err)
+	}
+
+	redisCancel()
+	log.Println("Successfully connected to Redis!")
+
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			log.Println("Error closing Redis connection:", err)
+		}
+	}()
 
 	// Create Gin router.
 	router := gin.Default()
