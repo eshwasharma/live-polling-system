@@ -16,10 +16,14 @@ import (
 )
 
 var PollCollection *mongo.Collection
-
+var VoteCollection *mongo.Collection
 // SetPollCollection connects the controller to the MongoDB polls collection.
 func SetPollCollection(collection *mongo.Collection) {
 	PollCollection = collection
+}
+// SetVoteCollection connects the controller to the MongoDB votes collection.
+func SetVoteCollection(collection *mongo.Collection) {
+	VoteCollection = collection
 }
 
 // CreatePoll saves a new poll in MongoDB.
@@ -180,5 +184,174 @@ func GetPollByID(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"poll":    poll,
+	})
+}
+
+// VoteRequest represents the data received when an audience member votes.
+type VoteRequest struct {
+	OptionIDs []string `json:"optionIds"`
+	VoterID   string   `json:"voterId"`
+}
+
+// SubmitVote validates and saves an audience vote in MongoDB.
+func SubmitVote(c *gin.Context) {
+	// Get poll ID from URL.
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	// Read submitted vote.
+	var request VoteRequest
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid vote data",
+		})
+		return
+	}
+
+	request.VoterID = strings.TrimSpace(request.VoterID)
+
+	if request.VoterID == "" || len(request.OptionIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Voter ID and at least one option are required",
+		})
+		return
+	}
+
+	// Set database request timeout.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Find the poll.
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	// Check whether the poll is active.
+	if poll.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "This poll is not accepting votes",
+		})
+		return
+	}
+
+	// Check single-choice and multiple-choice settings.
+	if !poll.Settings.AllowMultipleAnswers && len(request.OptionIDs) != 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Please select only one option",
+		})
+		return
+	}
+
+	// Check that every selected option belongs to this poll.
+	validOptions := make(map[string]bool)
+
+	for _, option := range poll.Options {
+		validOptions[option.ID] = true
+	}
+
+	selectedOptions := make(map[string]bool)
+
+	for _, optionID := range request.OptionIDs {
+		if !validOptions[optionID] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Invalid poll option selected",
+			})
+			return
+		}
+
+		if selectedOptions[optionID] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Duplicate options are not allowed",
+			})
+			return
+		}
+
+		selectedOptions[optionID] = true
+	}
+
+	// Check whether this browser has already voted.
+	var existingVote models.Vote
+
+	err = VoteCollection.FindOne(
+		ctx,
+		bson.M{
+			"pollId":  objectID,
+			"voterId": request.VoterID,
+		},
+	).Decode(&existingVote)
+
+	if err == nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"success": false,
+			"message": "You have already voted in this poll",
+		})
+		return
+	}
+
+	if err != mongo.ErrNoDocuments {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to check previous vote",
+		})
+		return
+	}
+
+	// Create the vote document.
+	vote := models.Vote{
+		ID:        bson.NewObjectID(),
+		PollID:    objectID,
+		OptionIDs: request.OptionIDs,
+		VoterID:   request.VoterID,
+		CreatedAt: time.Now(),
+	}
+
+	// Save vote in MongoDB.
+	_, err = VoteCollection.InsertOne(ctx, vote)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to save vote",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"success": true,
+		"message": "Vote submitted successfully",
 	})
 }

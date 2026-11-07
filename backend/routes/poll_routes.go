@@ -18,5 +18,8 @@ func PollRoutes(router *gin.Engine) {
 
 		// Retrieve a single poll by ID
 		pollGroup.GET("/:id", controllers.GetPollByID)
+
+		// Submit a vote for a poll
+		pollGroup.POST("/:id/votes", controllers.SubmitVote)
 	}
 }

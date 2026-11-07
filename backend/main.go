@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func main() {
@@ -52,12 +53,35 @@ func main() {
 		}
 	}()
 
-	// Select database and collection.
-	database := client.Database("pulsepoll")
-	pollCollection := database.Collection("polls")
+// Select database and collections.
+database := client.Database("pulsepoll")
 
-	// Connect MongoDB collection to poll controller.
-	controllers.SetPollCollection(pollCollection)
+pollCollection := database.Collection("polls")
+voteCollection := database.Collection("votes")
+
+// Prevent the same browser from voting twice in the same poll.
+voteIndex := mongo.IndexModel{
+	Keys: bson.D{
+		{Key: "pollId", Value: 1},
+		{Key: "voterId", Value: 1},
+	},
+	Options: options.Index().SetUnique(true),
+}
+
+_, err = voteCollection.Indexes().CreateOne(
+	context.Background(),
+	voteIndex,
+)
+
+if err != nil {
+	log.Fatal("Failed to create vote index: ", err)
+}
+
+log.Println("Vote duplicate-protection index created successfully!")
+
+// Connect MongoDB collections to controllers.
+controllers.SetPollCollection(pollCollection)
+controllers.SetVoteCollection(voteCollection)
 
 	// Create Gin router.
 	router := gin.Default()
