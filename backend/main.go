@@ -101,6 +101,7 @@ func main() {
 
 	redisCancel()
 	log.Println("Successfully connected to Redis!")
+	controllers.SetRedisClient(redisClient)
 
 	defer func() {
 		if err := redisClient.Close(); err != nil {

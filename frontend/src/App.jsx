@@ -1,26 +1,26 @@
 
 import { useState, useEffect } from "react";
-import { Routes, Route, useParams } from "react-router-dom";
+import { Routes, Route, useNavigate } from "react-router-dom";
 
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import Dashboard from "./pages/Dashboard";
 import CreatePoll from "./pages/CreatePoll";
 import ActivePolls from "./pages/ActivePolls";
-import VotingPage from "./pages/VotingPage";
 import ResultsPage from "./pages/ResultsPage";
 import PublicVotingPage from "./pages/PublicVotingPage";
 
 import "./App.css";
 
-// Temporary public poll route.
-// We will connect this page to MongoDB in the next step.
+// Public poll route connected to MongoDB.
 function PublicPollRoute() {
   return <PublicVotingPage />;
 }
 
-// Your existing dashboard application.
+// Existing dashboard application.
 function DashboardApp() {
+  const navigate = useNavigate();
+
   const [activePage, setActivePage] = useState("Dashboard");
   const [polls, setPolls] = useState([]);
   const [selectedPoll, setSelectedPoll] = useState(null);
@@ -126,32 +126,47 @@ function DashboardApp() {
     }
   }
 
+  // Open the backend-connected public voting page.
   function handleViewPoll(poll) {
-    setSelectedPoll(poll);
-    setActivePage("Vote");
+    navigate(`/poll/${poll.id}`);
   }
 
-  // Temporary frontend-only voting logic.
-  function handleSubmitVote(pollId, selectedOptions) {
-    setPolls((currentPolls) =>
-      currentPolls.map((poll) => {
-        if (poll.id !== pollId) return poll;
+  // Fetch actual results from MongoDB.
+  async function handleViewResults() {
+    if (!selectedPoll) return;
 
-        const updatedOptionVotes = poll.options.map((option, index) =>
-          selectedOptions.includes(option)
-            ? poll.optionVotes[index] + 1
-            : poll.optionVotes[index]
-        );
+    setApiError("");
 
-        return {
-          ...poll,
-          votes: poll.votes + 1,
-          optionVotes: updatedOptionVotes,
-        };
-      })
-    );
+    try {
+      const response = await fetch(
+        `/api/polls/${selectedPoll.id}/results`
+      );
 
-    setVotedPollIds((currentIds) => [...currentIds, pollId]);
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to load poll results.");
+      }
+
+      setPolls((currentPolls) =>
+        currentPolls.map((poll) =>
+          poll.id === selectedPoll.id
+            ? {
+                ...poll,
+                votes: data.totalVotes,
+                optionVotes: data.options.map(
+                  (option) => option.votes
+                ),
+              }
+            : poll
+        )
+      );
+
+      setActivePage("Results");
+    } catch (error) {
+      console.error("Fetch results error:", error);
+      setApiError(error.message);
+    }
   }
 
   const currentPoll = polls.find(
@@ -172,52 +187,10 @@ function DashboardApp() {
     return false;
   }
 
-  
-async function handleViewResults() {
-  if (!currentPoll) return;
-
-  setApiError("");
-
-  try {
-    const response = await fetch(
-      `/api/polls/${currentPoll.id}/results`
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || !data.success) {
-      throw new Error(data.message || "Unable to load poll results.");
-    }
-
-    // Update the poll with actual MongoDB vote counts.
-    setPolls((currentPolls) =>
-      currentPolls.map((poll) =>
-        poll.id === currentPoll.id
-          ? {
-              ...poll,
-              votes: data.totalVotes,
-              optionVotes: data.options.map((option) => option.votes),
-            }
-          : poll
-      )
-    );
-
-    setActivePage("Results");
-  } catch (error) {
-    console.error("Fetch results error:", error);
-    setApiError(error.message);
-  }
-}
-
-
   return (
     <div className="app-layout">
       <Sidebar
-        activePage={
-          activePage === "Vote" || activePage === "Results"
-            ? "Active Polls"
-            : activePage
-        }
+        activePage={activePage}
         onNavigate={handleNavigation}
       />
 
@@ -246,17 +219,6 @@ async function handleViewResults() {
           />
         )}
 
-        {activePage === "Vote" && currentPoll && (
-          <VotingPage
-            poll={currentPoll}
-            onBack={() => setActivePage("Active Polls")}
-            onSubmitVote={handleSubmitVote}
-            hasVoted={votedPollIds.includes(currentPoll.id)}
-            onViewResults={handleViewResults}
-            canViewResults={canViewResults(currentPoll)}
-          />
-        )}
-
         {activePage === "Results" && currentPoll && (
           <ResultsPage
             poll={currentPoll}
@@ -268,7 +230,6 @@ async function handleViewResults() {
         {activePage !== "Dashboard" &&
           activePage !== "Create Poll" &&
           activePage !== "Active Polls" &&
-          activePage !== "Vote" &&
           activePage !== "Results" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>

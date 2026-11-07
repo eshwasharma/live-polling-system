@@ -8,7 +8,32 @@ import {
   AlertCircle,
   Send,
   Check,
+  BarChart3,
 } from "lucide-react";
+
+// Generate or retrieve the same voter ID for this poll and browser.
+function getVoterId(pollId) {
+  const storageKey = `pulsepoll-voter-${pollId}`;
+
+  let savedVoterId = localStorage.getItem(storageKey);
+
+  if (!savedVoterId) {
+    savedVoterId = crypto.randomUUID();
+    localStorage.setItem(storageKey, savedVoterId);
+  }
+
+  return savedVoterId;
+}
+
+// Check whether this browser has already voted in this poll.
+function hasBrowserVoted(pollId) {
+  return localStorage.getItem(`pulsepoll-voted-${pollId}`) === "true";
+}
+
+// Save the voting status in this browser.
+function saveVotedStatus(pollId) {
+  localStorage.setItem(`pulsepoll-voted-${pollId}`, "true");
+}
 
 function PublicVotingPage() {
   const { id } = useParams();
@@ -17,11 +42,16 @@ function PublicVotingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedOptions, setSelectedOptions] = useState([]);
-  const [voterId, setVoterId] = useState("");
   const [hasVoted, setHasVoted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
+  // Results state.
+  const [results, setResults] = useState(null);
+  const [loadingResults, setLoadingResults] = useState(false);
+  const [resultsError, setResultsError] = useState("");
+
+  // Fetch poll details.
   useEffect(() => {
     async function fetchPoll() {
       setLoading(true);
@@ -36,6 +66,7 @@ function PublicVotingPage() {
         }
 
         const savedPoll = data.poll;
+        const alreadyVoted = hasBrowserVoted(id);
 
         setPoll({
           ...savedPoll,
@@ -47,23 +78,8 @@ function PublicVotingPage() {
             savedPoll.settings?.anonymousVoting ?? true,
         });
 
-        // Generate a stable browser ID for duplicate-vote protection.
-        const storageKey = `pulsepoll-voter-${id}`;
-        let savedVoterId = localStorage.getItem(storageKey);
-
-        if (!savedVoterId) {
-          savedVoterId = crypto.randomUUID();
-          localStorage.setItem(storageKey, savedVoterId);
-        }
-
-        setVoterId(savedVoterId);
-
-        // Check whether this browser has already voted.
-        const alreadyVoted = localStorage.getItem(
-          `pulsepoll-voted-${id}`
-        );
-
-        setHasVoted(alreadyVoted === "true");
+        getVoterId(id);
+        setHasVoted(alreadyVoted);
       } catch (err) {
         console.error("Public poll fetch error:", err);
         setError(err.message || "Something went wrong.");
@@ -75,7 +91,98 @@ function PublicVotingPage() {
     fetchPoll();
   }, [id]);
 
+  // Connect to the backend WebSocket for live poll updates.
+  useEffect(() => {
+    let socket;
+    let reconnectTimer;
+    let shouldReconnect = true;
+
+    function connectWebSocket() {
+      if (!shouldReconnect) return;
+
+      const protocol =
+        window.location.protocol === "https:" ? "wss:" : "ws:";
+
+      const wsUrl = `${protocol}//${window.location.host}/api/polls/${id}/ws`;
+
+      console.log("Connecting to poll WebSocket:", wsUrl);
+
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log("Connected to live poll updates:", id);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type !== "results") return;
+
+          // The WebSocket sends the latest complete results from MongoDB.
+          // Support both optionId and id response field names.
+          const updatedOptions = (data.options || []).map((option) => ({
+            ...option,
+            optionId: option.optionId || option.id,
+          }));
+
+          // Update the total vote count immediately.
+          setPoll((currentPoll) => {
+            if (!currentPoll) return currentPoll;
+
+            return {
+              ...currentPoll,
+              votes: data.totalVotes,
+            };
+          });
+
+          // Update result bars only if the user has opened the results.
+          setResults((currentResults) => {
+            if (!currentResults) return currentResults;
+
+            return {
+              ...data,
+              options: updatedOptions,
+            };
+          });
+
+          console.log("Live poll results updated:", data.totalVotes);
+        } catch (err) {
+          console.error("Invalid WebSocket message:", err);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error("Poll WebSocket error:", err);
+      };
+
+      socket.onclose = () => {
+        console.log("Poll WebSocket disconnected:", id);
+
+        // Try to reconnect after 2 seconds.
+        if (shouldReconnect) {
+          reconnectTimer = setTimeout(() => {
+            connectWebSocket();
+          }, 2000);
+        }
+      };
+    }
+
+    connectWebSocket();
+
+    return () => {
+      shouldReconnect = false;
+      clearTimeout(reconnectTimer);
+
+      if (socket) {
+        socket.close();
+      }
+    };
+  }, [id]);
+
   function handleOptionChange(optionId) {
+    if (hasVoted || submitting) return;
+
     setMessage("");
 
     if (poll.allowMultiple) {
@@ -94,6 +201,11 @@ function PublicVotingPage() {
 
     if (hasVoted || submitting) return;
 
+    if (hasBrowserVoted(id)) {
+      setHasVoted(true);
+      return;
+    }
+
     if (selectedOptions.length === 0) {
       setMessage("Please select at least one option.");
       return;
@@ -103,6 +215,8 @@ function PublicVotingPage() {
     setMessage("");
 
     try {
+      const currentVoterId = getVoterId(id);
+
       const response = await fetch(`/api/polls/${id}/votes`, {
         method: "POST",
         headers: {
@@ -110,20 +224,31 @@ function PublicVotingPage() {
         },
         body: JSON.stringify({
           optionIds: selectedOptions,
-          voterId: voterId,
+          voterId: currentVoterId,
         }),
       });
 
       const data = await response.json();
 
+      // Backend detected an existing vote.
+      if (response.status === 409) {
+        saveVotedStatus(id);
+        setHasVoted(true);
+        setMessage("");
+        return;
+      }
+
       if (!response.ok || !data.success) {
         throw new Error(data.message || "Unable to submit your vote.");
       }
 
-      localStorage.setItem(`pulsepoll-voted-${id}`, "true");
-
+      // Save voting status after successful submission.
+      saveVotedStatus(id);
       setHasVoted(true);
+      setMessage("");
 
+      // Update the displayed vote count.
+      // The WebSocket will also synchronize the latest count.
       setPoll((currentPoll) => ({
         ...currentPoll,
         votes: currentPoll.votes + 1,
@@ -133,6 +258,33 @@ function PublicVotingPage() {
       setMessage(err.message || "Failed to submit your vote.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Fetch actual results from MongoDB.
+  async function handleViewResults() {
+    setLoadingResults(true);
+    setResultsError("");
+
+    try {
+      const response = await fetch(`/api/polls/${id}/results`);
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to load results.");
+      }
+
+      setResults(data);
+
+      setPoll((currentPoll) => ({
+        ...currentPoll,
+        votes: data.totalVotes,
+      }));
+    } catch (err) {
+      console.error("Fetch results error:", err);
+      setResultsError(err.message || "Unable to load results.");
+    } finally {
+      setLoadingResults(false);
     }
   }
 
@@ -253,10 +405,7 @@ function PublicVotingPage() {
             ) : (
               <>
                 {message && (
-                  <p
-                    className="vote-validation-message"
-                    role="alert"
-                  >
+                  <p className="vote-validation-message" role="alert">
                     {message}
                   </p>
                 )}
@@ -272,6 +421,85 @@ function PublicVotingPage() {
               </>
             )}
           </form>
+
+          {/* View Results button */}
+          {hasVoted && (
+            <button
+              type="button"
+              className="primary-button submit-vote-button"
+              onClick={handleViewResults}
+              disabled={loadingResults}
+              style={{ marginTop: "16px" }}
+            >
+              <BarChart3 size={17} />
+              {loadingResults ? "Loading Results..." : "View Results"}
+            </button>
+          )}
+
+          {/* Results error */}
+          {resultsError && (
+            <p className="vote-validation-message" role="alert">
+              {resultsError}
+            </p>
+          )}
+
+          {/* Live results updated through WebSocket */}
+          {results && (
+            <div className="voting-results" style={{ marginTop: "28px" }}>
+              <h2>Poll Results</h2>
+
+              <p>
+                Total votes: <strong>{results.totalVotes}</strong>
+              </p>
+
+              {results.options.map((option) => (
+                <div
+                  key={option.optionId || option.id}
+                  className="result-option"
+                  style={{ marginTop: "20px" }}
+                >
+                  <div
+                    className="result-option-header"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <span>{option.text}</span>
+
+                    <strong>
+                      {option.votes} votes (
+                      {Number(option.percentage).toFixed(1)}%)
+                    </strong>
+                  </div>
+
+                  <div
+                    className="result-progress-track"
+                    style={{
+                      width: "100%",
+                      height: "10px",
+                      background: "#eeeafc",
+                      borderRadius: "10px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      className="result-progress-fill"
+                      style={{
+                        width: `${option.percentage}%`,
+                        height: "100%",
+                        background: "#6854df",
+                        borderRadius: "10px",
+                        transition: "width 0.3s ease",
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </main>
 
         <aside className="voting-side-panel">

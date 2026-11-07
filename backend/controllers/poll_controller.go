@@ -3,6 +3,8 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"live-polling-backend/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -17,13 +20,21 @@ import (
 
 var PollCollection *mongo.Collection
 var VoteCollection *mongo.Collection
+var RedisClient *redis.Client
+
 // SetPollCollection connects the controller to the MongoDB polls collection.
 func SetPollCollection(collection *mongo.Collection) {
 	PollCollection = collection
 }
+
 // SetVoteCollection connects the controller to the MongoDB votes collection.
 func SetVoteCollection(collection *mongo.Collection) {
 	VoteCollection = collection
+}
+
+// SetRedisClient connects the controller to Redis.
+func SetRedisClient(client *redis.Client) {
+	RedisClient = client
 }
 
 // CreatePoll saves a new poll in MongoDB.
@@ -114,6 +125,7 @@ func GetAllPolls(c *gin.Context) {
 		})
 		return
 	}
+
 	defer cursor.Close(ctx)
 
 	var polls []models.Poll
@@ -191,6 +203,13 @@ func GetPollByID(c *gin.Context) {
 type VoteRequest struct {
 	OptionIDs []string `json:"optionIds"`
 	VoterID   string   `json:"voterId"`
+}
+
+// VoteEvent represents a notification published through Redis.
+type VoteEvent struct {
+	Type      string   `json:"type"`
+	PollID    string   `json:"pollId"`
+	OptionIDs []string `json:"optionIds"`
 }
 
 // SubmitVote validates and saves an audience vote in MongoDB.
@@ -339,7 +358,7 @@ func SubmitVote(c *gin.Context) {
 		CreatedAt: time.Now(),
 	}
 
-	// Save vote in MongoDB.
+	// Save vote permanently in MongoDB first.
 	_, err = VoteCollection.InsertOne(ctx, vote)
 
 	if err != nil {
@@ -348,6 +367,66 @@ func SubmitVote(c *gin.Context) {
 			"message": "Failed to save vote",
 		})
 		return
+	}
+
+	// Update Redis counters and publish the vote event.
+	// MongoDB remains the permanent source of truth.
+	if RedisClient != nil {
+		redisCtx, redisCancel := context.WithTimeout(
+			c.Request.Context(),
+			3*time.Second,
+		)
+
+		event := VoteEvent{
+			Type:      "vote_submitted",
+			PollID:    pollID,
+			OptionIDs: request.OptionIDs,
+		}
+
+		eventData, marshalErr := json.Marshal(event)
+
+		if marshalErr != nil {
+			log.Println("Failed to prepare Redis vote event:", marshalErr)
+		} else {
+			// Use a Redis transaction so the counter updates
+			// and Pub/Sub notification are executed together.
+			pipe := RedisClient.TxPipeline()
+
+			// Increase total number of submitted votes by one.
+			pipe.Incr(
+				redisCtx,
+				"poll:"+pollID+":totalVotes",
+			)
+
+			// Increase the counter for every selected option.
+			for _, optionID := range request.OptionIDs {
+				pipe.HIncrBy(
+					redisCtx,
+					"poll:"+pollID+":optionVotes",
+					optionID,
+					1,
+				)
+			}
+
+			// Publish the event for WebSocket subscribers.
+			pipe.Publish(
+				redisCtx,
+				"poll:"+pollID+":votes",
+				string(eventData),
+			)
+
+			_, redisErr := pipe.Exec(redisCtx)
+
+			if redisErr != nil {
+				log.Println("Redis vote update failed:", redisErr)
+			} else {
+				log.Println("Redis counters updated and vote event published for poll:", pollID)
+			}
+		}
+
+		redisCancel()
+	} else {
+		log.Println("Redis client is unavailable; vote was saved in MongoDB")
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -410,6 +489,7 @@ func GetPollResults(c *gin.Context) {
 		})
 		return
 	}
+
 	defer cursor.Close(ctx)
 
 	var votes []models.Vote
@@ -454,11 +534,11 @@ func GetPollResults(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":      true,
-		"pollId":       poll.ID,
-		"title":        poll.Title,
-		"description":  poll.Description,
-		"totalVotes":   totalVotes,
-		"options":      optionResults,
+		"success":     true,
+		"pollId":      poll.ID,
+		"title":       poll.Title,
+		"description": poll.Description,
+		"totalVotes":  totalVotes,
+		"options":     optionResults,
 	})
 }
