@@ -355,3 +355,110 @@ func SubmitVote(c *gin.Context) {
 		"message": "Vote submitted successfully",
 	})
 }
+
+// GetPollResults retrieves the actual voting results from MongoDB.
+func GetPollResults(c *gin.Context) {
+	// Get poll ID from URL.
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Find the poll.
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	// Retrieve all votes belonging to this poll.
+	cursor, err := VoteCollection.Find(
+		ctx,
+		bson.M{"pollId": objectID},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve votes",
+		})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var votes []models.Vote
+
+	if err := cursor.All(ctx, &votes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to read votes",
+		})
+		return
+	}
+
+	// Count votes received by each option.
+	optionVoteCounts := make(map[string]int)
+
+	for _, vote := range votes {
+		for _, optionID := range vote.OptionIDs {
+			optionVoteCounts[optionID]++
+		}
+	}
+
+	totalVotes := len(votes)
+
+	// Prepare results for every poll option.
+	optionResults := make([]gin.H, 0, len(poll.Options))
+
+	for _, option := range poll.Options {
+		voteCount := optionVoteCounts[option.ID]
+
+		percentage := 0.0
+
+		if totalVotes > 0 {
+			percentage = float64(voteCount) / float64(totalVotes) * 100
+		}
+
+		optionResults = append(optionResults, gin.H{
+			"optionId":   option.ID,
+			"text":       option.Text,
+			"votes":      voteCount,
+			"percentage": percentage,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"pollId":       poll.ID,
+		"title":        poll.Title,
+		"description":  poll.Description,
+		"totalVotes":   totalVotes,
+		"options":      optionResults,
+	})
+}

@@ -21,5 +21,7 @@ func PollRoutes(router *gin.Engine) {
 
 		// Submit a vote for a poll
 		pollGroup.POST("/:id/votes", controllers.SubmitVote)
+		// Retrieve poll results
+pollGroup.GET("/:id/results", controllers.GetPollResults)
 	}
 }
