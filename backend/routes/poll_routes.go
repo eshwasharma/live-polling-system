@@ -15,5 +15,8 @@ func PollRoutes(router *gin.Engine) {
 
 		// Retrieve all polls
 		pollGroup.GET("/", controllers.GetAllPolls)
+
+		// Retrieve a single poll by ID
+		pollGroup.GET("/:id", controllers.GetPollByID)
 	}
 }

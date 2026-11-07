@@ -132,3 +132,53 @@ func GetAllPolls(c *gin.Context) {
 		"polls":   polls,
 	})
 }
+
+// GetPollByID retrieves a single poll using its MongoDB ID.
+func GetPollByID(c *gin.Context) {
+	// Get the poll ID from the URL.
+	pollID := c.Param("id")
+
+	// Validate the MongoDB ObjectID.
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	// Set a timeout for the database request.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Find the poll in MongoDB.
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	// Return the poll details.
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"poll":    poll,
+	})
+}
