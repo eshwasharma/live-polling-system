@@ -1,3 +1,4 @@
+
 package routes
 
 import (
@@ -18,5 +19,11 @@ func PollRoutes(router *gin.Engine) {
 
 		// WebSocket route for live poll updates
 		pollGroup.GET("/:id/ws", controllers.PollWebSocket)
+	}
+
+	// AI poll generation routes
+	aiGroup := router.Group("/api/ai")
+	{
+		aiGroup.POST("/generate-poll", controllers.GenerateAIPoll)
 	}
 }

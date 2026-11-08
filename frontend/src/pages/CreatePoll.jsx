@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import {
   ArrowLeft,
@@ -9,7 +10,6 @@ import {
   Trash2,
   Clock3,
   CalendarDays,
-  Globe,
   Eye,
   EyeOff,
   Check,
@@ -50,23 +50,32 @@ const templates = [
 function CreatePoll({ onPublish }) {
   const [creationMode, setCreationMode] = useState("choose");
   const [templateCategory, setTemplateCategory] = useState("All");
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [options, setOptions] = useState(["", ""]);
+
   const [aiPrompt, setAiPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState("");
+
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [anonymous, setAnonymous] = useState(true);
   const [showResults, setShowResults] = useState("after-voting");
+
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [linkExpiration, setLinkExpiration] = useState("never");
+
   const [successMessage, setSuccessMessage] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
 
   const filteredTemplates =
     templateCategory === "All"
       ? templates
-      : templates.filter((template) => template.category === templateCategory);
+      : templates.filter(
+          (template) => template.category === templateCategory
+        );
 
   function startCustomPoll() {
     setCreationMode("editor");
@@ -74,6 +83,7 @@ function CreatePoll({ onPublish }) {
     setDescription("");
     setOptions(["", ""]);
     setSuccessMessage("");
+    setAiError("");
   }
 
   function chooseTemplate(template) {
@@ -85,79 +95,134 @@ function CreatePoll({ onPublish }) {
   }
 
   function addOption() {
+    if (options.length >= 6) return;
     setOptions([...options, ""]);
   }
 
   function updateOption(index, value) {
-    setOptions(options.map((option, i) => (i === index ? value : option)));
+    setOptions(
+      options.map((option, i) => (i === index ? value : option))
+    );
   }
 
   function removeOption(index) {
     if (options.length <= 2) return;
+
     setOptions(options.filter((_, i) => i !== index));
   }
 
-  function generateDemoPoll() {
-    if (!aiPrompt.trim()) return;
+  // Real Gemini AI poll generation
+  async function generateAIPoll() {
+    if (!aiPrompt.trim() || isGenerating) return;
 
-    const prompt = aiPrompt.trim();
-    const question = prompt.endsWith("?") ? prompt : `${prompt}?`;
+    setIsGenerating(true);
+    setAiError("");
+    setSuccessMessage("");
 
-    setTitle(question);
-    setDescription("Generated from your prompt. You can edit this poll before publishing.");
-    setOptions(["Option 1", "Option 2", "Option 3", "Other"]);
-    setCreationMode("editor");
+    try {
+      const response = await fetch("/api/ai/generate-poll", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.message || "Failed to generate poll. Please try again."
+        );
+      }
+
+      const generatedPoll = data.poll;
+
+      if (
+        !generatedPoll ||
+        !generatedPoll.question ||
+        !Array.isArray(generatedPoll.options) ||
+        generatedPoll.options.length < 2 ||
+        generatedPoll.options.length > 6
+      ) {
+        throw new Error(
+          "AI returned an incomplete poll. Please try again."
+        );
+      }
+
+      setTitle(generatedPoll.question);
+      setDescription(generatedPoll.description || "");
+      setOptions(generatedPoll.options);
+
+      setCreationMode("editor");
+    } catch (error) {
+      console.error("AI poll generation error:", error);
+
+      setAiError(
+        error.message ||
+          "Something went wrong while generating your poll."
+      );
+    } finally {
+      setIsGenerating(false);
+    }
   }
 
-  
-async function publishPoll(event) {
-  event.preventDefault();
+  async function publishPoll(event) {
+    event.preventDefault();
 
-  if (isPublishing) return;
+    if (isPublishing) return;
 
-  const validOptions = options
-    .map((option) => option.trim())
-    .filter(Boolean);
+    const validOptions = options
+      .map((option) => option.trim())
+      .filter(Boolean);
 
-  if (!title.trim()) {
-    setSuccessMessage("Please enter a poll question.");
-    return;
+    if (!title.trim()) {
+      setSuccessMessage("Please enter a poll question.");
+      return;
+    }
+
+    if (validOptions.length < 2) {
+      setSuccessMessage("Please add at least two answer options.");
+      return;
+    }
+
+    if (startTime && endTime && new Date(endTime) <= new Date(startTime)) {
+      setSuccessMessage("End time must be later than start time.");
+      return;
+    }
+
+    setIsPublishing(true);
+    setSuccessMessage("");
+
+    const newPoll = {
+      title: title.trim(),
+      description: description.trim(),
+      options: validOptions,
+      allowMultiple,
+      anonymous,
+      showResults,
+      startTime,
+      endTime,
+      linkExpiration,
+    };
+
+    try {
+      await onPublish(newPoll);
+    } catch (error) {
+      setSuccessMessage(
+        error.message || "Failed to publish poll. Please try again."
+      );
+    } finally {
+      setIsPublishing(false);
+    }
   }
-
-  if (validOptions.length < 2) {
-    setSuccessMessage("Please add at least two answer options.");
-    return;
-  }
-
-  setIsPublishing(true);
-  setSuccessMessage("");
-
-  const newPoll = {
-    title: title.trim(),
-    description: description.trim(),
-    options: validOptions,
-    allowMultiple,
-    anonymous,
-    showResults,
-    startTime,
-    endTime,
-    linkExpiration,
-  };
-
-  try {
-    await onPublish(newPoll);
-  } catch (error) {
-    setSuccessMessage(
-      error.message || "Failed to publish poll. Please try again."
-    );
-  } finally {
-    setIsPublishing(false);
-  }
-}
 
   function goBack() {
     setCreationMode("choose");
     setSuccessMessage("");
+    setAiError("");
   }
 
   return (
@@ -213,7 +278,10 @@ async function publishPoll(event) {
 
             <button
               className="creation-method-card ai-method-card"
-              onClick={() => setCreationMode("ai")}
+              onClick={() => {
+                setCreationMode("ai");
+                setAiError("");
+              }}
             >
               <div className="creation-method-icon orange">
                 <Sparkles size={23} />
@@ -316,38 +384,57 @@ async function publishPoll(event) {
             </div>
             <h2>What would you like to ask?</h2>
             <p>
-              Describe your poll idea. We'll use it to prepare a draft that
-              you can edit.
+              Describe your poll idea. Gemini will prepare a draft that
+              you can edit before publishing.
             </p>
           </div>
 
           <div className="ai-prompt-area">
             <label htmlFor="ai-prompt">YOUR POLL IDEA</label>
+
             <textarea
               id="ai-prompt"
               value={aiPrompt}
               onChange={(event) => setAiPrompt(event.target.value)}
               placeholder="Example: Create a poll to decide which day is best for our team outing..."
               rows={5}
+              disabled={isGenerating}
             />
 
             <div className="ai-prompt-footer">
               <span>Be as specific as you like.</span>
+
               <button
+                type="button"
                 className="primary-button"
-                onClick={generateDemoPoll}
-                disabled={!aiPrompt.trim()}
+                onClick={generateAIPoll}
+                disabled={!aiPrompt.trim() || isGenerating}
               >
-                <Sparkles size={16} /> Generate poll
+                <Sparkles size={16} />
+                {isGenerating ? "Generating..." : "Generate poll"}
               </button>
             </div>
           </div>
 
-          <p className="ai-demo-note">
-            <Sparkles size={14} />
-            Demo mode: real AI generation will be connected through the
-            backend later.
-          </p>
+          {aiError && (
+            <p className="ai-demo-note" role="alert">
+              {aiError}
+            </p>
+          )}
+
+          {isGenerating && (
+            <p className="ai-demo-note">
+              <Sparkles size={14} />
+              Gemini is generating your poll. This may take a few seconds...
+            </p>
+          )}
+
+          {!isGenerating && !aiError && (
+            <p className="ai-demo-note">
+              <Sparkles size={14} />
+              AI-generated polls can be edited before publishing.
+            </p>
+          )}
         </section>
       )}
 
@@ -357,7 +444,11 @@ async function publishPoll(event) {
             <section className="poll-workspace-panel">
               <div className="workspace-heading">
                 <div>
-                  <button type="button" className="back-button" onClick={goBack}>
+                  <button
+                    type="button"
+                    className="back-button"
+                    onClick={goBack}
+                  >
                     <ArrowLeft size={16} /> Back to creation methods
                   </button>
                   <h2>Poll details</h2>
@@ -397,7 +488,9 @@ async function publishPoll(event) {
               <div className="options-heading">
                 <div>
                   <h3>Answer options</h3>
-                  <p>Add at least two options for participants to choose from.</p>
+                  <p>
+                    Add at least two options for participants to choose from.
+                  </p>
                 </div>
                 <span>{options.length} options</span>
               </div>
@@ -431,6 +524,7 @@ async function publishPoll(event) {
                 type="button"
                 className="add-option-button"
                 onClick={addOption}
+                disabled={options.length >= 6}
               >
                 <Plus size={16} /> Add another option
               </button>
@@ -447,13 +541,17 @@ async function publishPoll(event) {
               <div className="setting-row">
                 <div className="setting-description">
                   <strong>Multiple selections</strong>
-                  <span>Allow participants to select more than one option.</span>
+                  <span>
+                    Allow participants to select more than one option.
+                  </span>
                 </div>
                 <label className="switch-control">
                   <input
                     type="checkbox"
                     checked={allowMultiple}
-                    onChange={(event) => setAllowMultiple(event.target.checked)}
+                    onChange={(event) =>
+                      setAllowMultiple(event.target.checked)
+                    }
                   />
                   <span className="switch-slider"></span>
                 </label>
@@ -462,13 +560,17 @@ async function publishPoll(event) {
               <div className="setting-row">
                 <div className="setting-description">
                   <strong>Anonymous voting</strong>
-                  <span>Do not display voters' identities in poll results.</span>
+                  <span>
+                    Do not display voters' identities in poll results.
+                  </span>
                 </div>
                 <label className="switch-control">
                   <input
                     type="checkbox"
                     checked={anonymous}
-                    onChange={(event) => setAnonymous(event.target.checked)}
+                    onChange={(event) =>
+                      setAnonymous(event.target.checked)
+                    }
                   />
                   <span className="switch-slider"></span>
                 </label>
@@ -493,7 +595,9 @@ async function publishPoll(event) {
             <section className="poll-workspace-panel schedule-panel">
               <div className="workspace-heading">
                 <div>
-                  <h2><CalendarDays size={17} /> Schedule</h2>
+                  <h2>
+                    <CalendarDays size={17} /> Schedule
+                  </h2>
                   <p>Set when your poll is available.</p>
                 </div>
               </div>
@@ -523,7 +627,9 @@ async function publishPoll(event) {
                 <select
                   id="link-expiration"
                   value={linkExpiration}
-                  onChange={(event) => setLinkExpiration(event.target.value)}
+                  onChange={(event) =>
+                    setLinkExpiration(event.target.value)
+                  }
                 >
                   <option value="never">Never</option>
                   <option value="1-day">After 1 day</option>
@@ -541,7 +647,9 @@ async function publishPoll(event) {
             <section className="poll-workspace-panel poll-preview-panel">
               <div className="workspace-heading">
                 <div>
-                  <h2><Eye size={17} /> Preview</h2>
+                  <h2>
+                    <Eye size={17} /> Preview
+                  </h2>
                   <p>How your poll will appear.</p>
                 </div>
               </div>
@@ -550,6 +658,7 @@ async function publishPoll(event) {
                 <span className="preview-label">LIVE POLL PREVIEW</span>
                 <h3>{title || "Your poll question will appear here"}</h3>
                 {description && <p>{description}</p>}
+
                 <div className="preview-options">
                   {options.filter(Boolean).map((option, index) => (
                     <div className="preview-option" key={index}>
@@ -558,8 +667,12 @@ async function publishPoll(event) {
                     </div>
                   ))}
                 </div>
+
                 <span className="preview-footer">
-                  <EyeOff size={13} /> {anonymous ? "Anonymous voting" : "Voter identities enabled"}
+                  <EyeOff size={13} />
+                  {anonymous
+                    ? "Anonymous voting"
+                    : "Voter identities enabled"}
                 </span>
               </div>
             </section>
@@ -570,14 +683,15 @@ async function publishPoll(event) {
               <span className="publish-status-dot"></span>
               Draft · Not published
             </div>
+
             <button
-  type="submit"
-  className="primary-button"
-  disabled={isPublishing}
->
-  {isPublishing ? "Publishing..." : "Publish Poll"}
-  {!isPublishing && <ArrowRight size={16} />}
-</button>
+              type="submit"
+              className="primary-button"
+              disabled={isPublishing}
+            >
+              {isPublishing ? "Publishing..." : "Publish Poll"}
+              {!isPublishing && <ArrowRight size={16} />}
+            </button>
           </div>
 
           {successMessage && (
