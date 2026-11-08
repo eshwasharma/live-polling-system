@@ -1,3 +1,5 @@
+
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ArrowLeft,
   BarChart3,
@@ -5,27 +7,215 @@ import {
   Trophy,
   CheckCircle2,
   Lock,
+  Download,
+  RefreshCw,
+  PieChart,
 } from "lucide-react";
 
+const CHART_COLORS = [
+  "#7657e8",
+  "#3695e8",
+  "#f59e42",
+  "#20b88a",
+  "#e66b9a",
+  "#8b7cf6",
+];
+
 function ResultsPage({ poll, onBack, canViewResults }) {
+  const [chartType, setChartType] = useState("bar");
+  const [results, setResults] = useState({
+    totalVotes: poll?.votes || 0,
+    optionVotes: poll?.optionVotes || [],
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [liveError, setLiveError] = useState("");
+
+  const pollId = poll?.id;
+
+  const optionNames = useMemo(
+    () =>
+      (poll?.options || []).map((option) =>
+        typeof option === "string" ? option : option.text
+      ),
+    [poll]
+  );
+
+  // Fetch the latest results from the backend.
+  const fetchResults = useCallback(async (showLoading = false) => {
+    if (!pollId) return;
+
+    if (showLoading) setIsRefreshing(true);
+
+    try {
+      const response = await fetch(`/api/polls/${pollId}/results`);
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to refresh results.");
+      }
+
+      setResults({
+        totalVotes: data.totalVotes || 0,
+        optionVotes: (data.options || []).map(
+          (option) => option.votes || 0
+        ),
+      });
+
+      setLiveError("");
+    } catch (error) {
+      console.error("Results refresh error:", error);
+      setLiveError(error.message);
+    } finally {
+      if (showLoading) setIsRefreshing(false);
+    }
+  }, [pollId]);
+
+  // Load results when the page opens.
+  useEffect(() => {
+    fetchResults();
+  }, [fetchResults]);
+
+  // Listen for live vote notifications through WebSocket.
+  useEffect(() => {
+    if (!pollId) return;
+
+    let socket;
+    let reconnectTimer;
+    let isCancelled = false;
+
+    const connectWebSocket = () => {
+      if (isCancelled) return;
+
+      const protocol =
+        window.location.protocol === "https:" ? "wss:" : "ws:";
+
+      socket = new WebSocket(
+        `${protocol}//${window.location.host}/api/polls/${pollId}/ws`
+      );
+
+      socket.onmessage = () => {
+        // Fetch the authoritative latest result after a vote notification.
+        fetchResults();
+      };
+
+      socket.onclose = () => {
+        if (!isCancelled) {
+          reconnectTimer = setTimeout(connectWebSocket, 2000);
+        }
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(reconnectTimer);
+
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
+    };
+  }, [pollId, fetchResults]);
+
   if (!poll) return null;
 
-  const totalVotes = poll.votes || 0;
-  const optionVotes = poll.optionVotes || poll.options.map(() => 0);
+  const totalVotes = results.totalVotes || 0;
+
+  const optionVotes = optionNames.map(
+    (_, index) => results.optionVotes[index] || 0
+  );
 
   const highestVotes = Math.max(0, ...optionVotes);
 
   const winnerIndexes =
     totalVotes > 0
       ? optionVotes
-          .map((votes, index) => (votes === highestVotes ? index : -1))
+          .map((votes, index) =>
+            votes === highestVotes ? index : -1
+          )
           .filter((index) => index !== -1)
       : [];
+
+  const chartData = optionNames.map((name, index) => {
+    const votes = optionVotes[index] || 0;
+
+    return {
+      name,
+      votes,
+      percentage:
+        totalVotes > 0 ? (votes / totalVotes) * 100 : 0,
+      color: CHART_COLORS[index % CHART_COLORS.length],
+    };
+  });
+
+  const gradient = chartData.reduce(
+    (value, item, index) => {
+      const start = value.position;
+      const end = start + item.percentage;
+
+      value.stops.push(
+        `${item.color} ${start}% ${end}%`
+      );
+
+      value.position = end;
+      return value;
+    },
+    { position: 0, stops: [] }
+  ).stops.join(", ");
+
+  // Download results as a CSV file.
+  const handleExportCSV = () => {
+    const rows = [
+      ["Poll Title", poll.title],
+      ["Total Votes", totalVotes],
+      [],
+      ["Option", "Votes", "Percentage"],
+      ...chartData.map((item) => [
+        item.name,
+        item.votes,
+        `${item.percentage.toFixed(1)}%`,
+      ]),
+    ];
+
+    const csvContent = rows
+      .map((row) =>
+        row
+          .map((cell) => {
+            const value = String(cell ?? "");
+            return `"${value.replace(/"/g, '""')}"`;
+          })
+          .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `${poll.title
+      .replace(/[^a-z0-9]/gi, "_")
+      .toLowerCase()}_results.csv`;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="results-page">
       <button className="back-button" onClick={onBack}>
-        <ArrowLeft size={16} /> Back to Active Polls
+        <ArrowLeft size={16} /> Back to My Polls
       </button>
 
       <div className="results-heading">
@@ -39,7 +229,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
         <div className="results-live-label">
           <span></span>
-          CURRENT RESULTS
+          LIVE RESULTS
         </div>
       </div>
 
@@ -47,6 +237,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
         <div className="results-title-icon">
           <BarChart3 size={22} />
         </div>
+
         <div>
           <h2>{poll.title}</h2>
           <p>{poll.description || "No description provided."}</p>
@@ -67,7 +258,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
             <BarChart3 size={20} />
           </div>
           <span>Answer options</span>
-          <strong>{poll.options.length}</strong>
+          <strong>{optionNames.length}</strong>
         </article>
 
         <article className="results-stat-card">
@@ -85,7 +276,20 @@ function ResultsPage({ poll, onBack, canViewResults }) {
             <h2>Vote distribution</h2>
             <p>Breakdown of votes received by each option.</p>
           </div>
-          <span>{totalVotes} total votes</span>
+
+          <div className="results-heading-actions">
+            <span>{totalVotes} total votes</span>
+
+            <button
+              className="results-export-button"
+              type="button"
+              onClick={handleExportCSV}
+              disabled={totalVotes === 0}
+            >
+              <Download size={15} />
+              Export CSV
+            </button>
+          </div>
         </div>
 
         {!canViewResults ? (
@@ -106,56 +310,151 @@ function ResultsPage({ poll, onBack, canViewResults }) {
             <p>Results will appear here once participants start voting.</p>
           </div>
         ) : (
-          <div className="results-option-list">
-            {poll.options.map((option, index) => {
-              const votes = optionVotes[index] || 0;
-              const percentage = (votes / totalVotes) * 100;
-              const isLeading = votes === highestVotes;
+          <>
+            <div className="results-chart-toolbar">
+              <div className="results-chart-tabs">
+                <button
+                  type="button"
+                  className={chartType === "bar" ? "active" : ""}
+                  onClick={() => setChartType("bar")}
+                >
+                  <BarChart3 size={16} />
+                  Bar
+                </button>
 
-              return (
-                <div className="result-option" key={index}>
-                  <div className="result-option-heading">
-                    <div className="result-option-name">
-                      <span className="result-option-number">
-                        {index + 1}
-                      </span>
-                      <strong>{option}</strong>
-                      {isLeading && (
-                        <span className="leading-badge">
-                          <Trophy size={11} /> Leading
-                        </span>
-                      )}
+                <button
+                  type="button"
+                  className={chartType === "pie" ? "active" : ""}
+                  onClick={() => setChartType("pie")}
+                >
+                  <PieChart size={16} />
+                  Pie
+                </button>
+
+                <button
+                  type="button"
+                  className={chartType === "donut" ? "active" : ""}
+                  onClick={() => setChartType("donut")}
+                >
+                  <PieChart size={16} />
+                  Donut
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="results-refresh-button"
+                onClick={() => fetchResults(true)}
+                disabled={isRefreshing}
+              >
+                <RefreshCw
+                  size={15}
+                  className={isRefreshing ? "refresh-spinning" : ""}
+                />
+                Refresh
+              </button>
+            </div>
+
+            {chartType === "bar" && (
+              <div className="results-option-list">
+                {chartData.map((item, index) => {
+                  const isLeading =
+                    item.votes === highestVotes && totalVotes > 0;
+
+                  return (
+                    <div className="result-option" key={index}>
+                      <div className="result-option-heading">
+                        <div className="result-option-name">
+                          <span className="result-option-number">
+                            {index + 1}
+                          </span>
+                          <strong>{item.name}</strong>
+
+                          {isLeading && (
+                            <span className="leading-badge">
+                              <Trophy size={11} /> Leading
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="result-option-count">
+                          <strong>{item.votes}</strong>
+                          <span>{item.percentage.toFixed(1)}%</span>
+                        </div>
+                      </div>
+
+                      <div className="result-progress-track">
+                        <div
+                          className="result-progress-fill"
+                          style={{
+                            width: `${item.percentage}%`,
+                            background: item.color,
+                          }}
+                        />
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
+            )}
 
-                    <div className="result-option-count">
-                      <strong>{votes}</strong>
-                      <span>{percentage.toFixed(1)}%</span>
+            {(chartType === "pie" || chartType === "donut") && (
+              <div className="results-circular-chart">
+                <div
+                  className={`results-pie-visual ${
+                    chartType === "donut" ? "donut" : ""
+                  }`}
+                  style={{
+                    background: `conic-gradient(${gradient})`,
+                  }}
+                >
+                  {chartType === "donut" && (
+                    <div className="results-donut-center">
+                      <strong>{totalVotes}</strong>
+                      <span>Total votes</span>
                     </div>
-                  </div>
-
-                  <div className="result-progress-track">
-                    <div
-                      className="result-progress-fill"
-                      style={{ width: `${percentage}%` }}
-                    ></div>
-                  </div>
+                  )}
                 </div>
-              );
-            })}
-          </div>
-        )}
 
-        {canViewResults && totalVotes > 0 && (
-          <div className="results-summary">
-            <CheckCircle2 size={18} />
-            <span>
-              {winnerIndexes.length === 1
-                ? `${poll.options[winnerIndexes[0]]} is currently leading.`
-                : "There is currently a tie between the leading options."}
-            </span>
-          </div>
+                <div className="results-chart-legend">
+                  {chartData.map((item, index) => (
+                    <div className="results-legend-item" key={index}>
+                      <span
+                        className="results-legend-dot"
+                        style={{ background: item.color }}
+                      />
+
+                      <div className="results-legend-name">
+                        <strong>{item.name}</strong>
+                        <span>{item.votes} votes</span>
+                      </div>
+
+                      <strong className="results-legend-percentage">
+                        {item.percentage.toFixed(1)}%
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="results-summary">
+              <CheckCircle2 size={18} />
+              <span>
+                {winnerIndexes.length === 1
+                  ? `${optionNames[winnerIndexes[0]]} is currently leading.`
+                  : "There is currently a tie between the leading options."}
+              </span>
+            </div>
+          </>
         )}
       </section>
+
+      {liveError && (
+        <p className="results-live-error" role="alert">
+          Live refresh issue: {liveError}
+        </p>
+      )}
 
       <p className="results-footer">
         <CheckCircle2 size={14} />
