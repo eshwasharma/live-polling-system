@@ -7,6 +7,7 @@ import Header from "./components/Header";
 import Dashboard from "./pages/Dashboard";
 import CreatePoll from "./pages/CreatePoll";
 import ActivePolls from "./pages/ActivePolls";
+import MyPolls from "./pages/MyPolls";
 import ResultsPage from "./pages/ResultsPage";
 import PublicVotingPage from "./pages/PublicVotingPage";
 
@@ -31,7 +32,9 @@ function DashboardApp() {
   function formatPoll(poll) {
     return {
       ...poll,
-      options: (poll.options || []).map((option) => option.text),
+      options: (poll.options || []).map((option) =>
+        typeof option === "string" ? option : option.text
+      ),
       votes: poll.votes || 0,
       optionVotes: poll.options?.map(() => 0) || [],
       showResults: poll.settings?.showResults || "after-voting",
@@ -94,7 +97,8 @@ function DashboardApp() {
     if (
       page === "Dashboard" ||
       page === "Active Polls" ||
-      page === "Past Polls"
+      page === "Past Polls" ||
+      page === "My Polls"
     ) {
       fetchPolls();
     }
@@ -118,7 +122,6 @@ function DashboardApp() {
         showResults: newPoll.showResults,
       },
 
-      // Convert selected local dates into UTC timestamps.
       startTime: newPoll.startTime
         ? new Date(newPoll.startTime).toISOString()
         : null,
@@ -158,15 +161,16 @@ function DashboardApp() {
     navigate(`/poll/${poll.id}`);
   }
 
-  // Fetch actual results from MongoDB.
-  async function handleViewResults() {
-    if (!selectedPoll) return;
+  // Fetch results for the poll selected from My Polls.
+  async function handleViewResults(poll) {
+    if (!poll) return;
 
     setApiError("");
+    setSelectedPoll(poll);
 
     try {
       const response = await fetch(
-        `/api/polls/${selectedPoll.id}/results`
+        `/api/polls/${poll.id}/results`
       );
 
       const data = await response.json();
@@ -176,16 +180,16 @@ function DashboardApp() {
       }
 
       setPolls((currentPolls) =>
-        currentPolls.map((poll) =>
-          poll.id === selectedPoll.id
+        currentPolls.map((currentPoll) =>
+          currentPoll.id === poll.id
             ? {
-                ...poll,
+                ...currentPoll,
                 votes: data.totalVotes,
                 optionVotes: data.options.map(
                   (option) => option.votes
                 ),
               }
-            : poll
+            : currentPoll
         )
       );
 
@@ -199,20 +203,6 @@ function DashboardApp() {
   const currentPoll = polls.find(
     (poll) => poll.id === selectedPoll?.id
   );
-
-  function canViewResults(poll) {
-    if (!poll) return false;
-
-    if (poll.showResults === "always") {
-      return true;
-    }
-
-    if (poll.showResults === "after-voting") {
-      return votedPollIds.includes(poll.id);
-    }
-
-    return false;
-  }
 
   return (
     <div className="app-layout">
@@ -269,11 +259,19 @@ function DashboardApp() {
           />
         )}
 
+        {activePage === "My Polls" && (
+          <MyPolls
+            polls={polls}
+            onViewPoll={handleViewPoll}
+            onViewResults={handleViewResults}
+          />
+        )}
+
         {activePage === "Results" && currentPoll && (
           <ResultsPage
             poll={currentPoll}
-            onBack={() => setActivePage("Active Polls")}
-            canViewResults={canViewResults(currentPoll)}
+            onBack={() => setActivePage("My Polls")}
+            canViewResults={true}
           />
         )}
 
@@ -281,6 +279,7 @@ function DashboardApp() {
           activePage !== "Create Poll" &&
           activePage !== "Active Polls" &&
           activePage !== "Past Polls" &&
+          activePage !== "My Polls" &&
           activePage !== "Results" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>
