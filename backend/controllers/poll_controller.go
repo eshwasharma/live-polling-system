@@ -76,12 +76,44 @@ func CreatePoll(c *gin.Context) {
 		poll.Options[i].ID = bson.NewObjectID().Hex()
 	}
 
-	// Set poll details.
-	now := time.Now()
-	poll.ID = bson.NewObjectID()
-	poll.Status = "active"
-	poll.CreatedAt = now
-	poll.UpdatedAt = now
+	
+// Set poll details and validate the schedule.
+now := time.Now()
+
+// The end time must be later than the start time.
+if poll.StartTime != nil && poll.EndTime != nil {
+	if !poll.EndTime.After(*poll.StartTime) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Poll end time must be later than its start time",
+		})
+		return
+	}
+}
+
+// Do not allow a poll to be created with an end time in the past.
+if poll.EndTime != nil && !poll.EndTime.After(now) {
+	c.JSON(http.StatusBadRequest, gin.H{
+		"success": false,
+		"message": "Poll end time must be in the future",
+	})
+	return
+}
+
+// Generate poll ID.
+poll.ID = bson.NewObjectID()
+
+// Future start time means the poll is scheduled.
+// Otherwise, the poll becomes active immediately.
+poll.Status = "active"
+
+if poll.StartTime != nil && poll.StartTime.After(now) {
+	poll.Status = "scheduled"
+}
+
+poll.CreatedAt = now
+poll.UpdatedAt = now
+
 
 	// Save poll in MongoDB.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -105,6 +137,7 @@ func CreatePoll(c *gin.Context) {
 }
 
 // GetAllPolls retrieves all polls from MongoDB.
+
 func GetAllPolls(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -142,12 +175,42 @@ func GetAllPolls(c *gin.Context) {
 		polls = []models.Poll{}
 	}
 
+	// Prepare polls with their actual vote counts.
+	type PollWithVotes struct {
+		models.Poll
+		Votes int64 `json:"votes"`
+	}
+
+	pollsWithVotes := make([]PollWithVotes, 0, len(polls))
+
+	// Count votes for every poll from MongoDB.
+	for _, poll := range polls {
+		voteCount, err := VoteCollection.CountDocuments(
+			ctx,
+			bson.M{"pollId": poll.ID},
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "Failed to retrieve poll vote counts",
+			})
+			return
+		}
+
+		pollsWithVotes = append(pollsWithVotes, PollWithVotes{
+			Poll:  poll,
+			Votes: voteCount,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"count":   len(polls),
-		"polls":   polls,
+		"count":   len(pollsWithVotes),
+		"polls":   pollsWithVotes,
 	})
 }
+
 
 // GetPollByID retrieves a single poll using its MongoDB ID.
 func GetPollByID(c *gin.Context) {
@@ -275,7 +338,10 @@ func SubmitVote(c *gin.Context) {
 		return
 	}
 
-	// Check whether the poll is active.
+	
+	// Check whether the poll is active and within its scheduled time.
+	now := time.Now()
+
 	if poll.Status != "active" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -283,6 +349,23 @@ func SubmitVote(c *gin.Context) {
 		})
 		return
 	}
+
+	if poll.StartTime != nil && now.Before(*poll.StartTime) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "This poll has not started yet",
+		})
+		return
+	}
+
+	if poll.EndTime != nil && !now.Before(*poll.EndTime) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "This poll has ended",
+		})
+		return
+	}
+
 
 	// Check single-choice and multiple-choice settings.
 	if !poll.Settings.AllowMultipleAnswers && len(request.OptionIDs) != 1 {
@@ -540,5 +623,57 @@ func GetPollResults(c *gin.Context) {
 		"description": poll.Description,
 		"totalVotes":  totalVotes,
 		"options":     optionResults,
+	})
+}
+
+// EndPoll manually ends an active poll.
+func EndPoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := PollCollection.UpdateOne(
+		ctx,
+		bson.M{
+			"_id":    objectID,
+			"status": "active",
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "completed",
+				"updatedAt": time.Now(),
+			},
+		},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to end poll",
+		})
+		return
+	}
+
+	if result.MatchedCount == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Poll not found or is not currently active",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll ended successfully",
 	})
 }

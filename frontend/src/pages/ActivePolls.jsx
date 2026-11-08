@@ -1,3 +1,5 @@
+
+import { useState } from "react";
 import {
   Radio,
   Users,
@@ -6,15 +8,66 @@ import {
   BarChart3,
   Clock3,
   FileText,
+  Share2,
+  SquareStop,
 } from "lucide-react";
 
-function ActivePolls({ polls, onViewPoll }) {
+import SharePollModal from "../components/SharePollModal";
+
+function ActivePolls({
+  polls,
+  onViewPoll,
+  onRefresh,
+  pageTitle = "Active Polls",
+}) {
+  const [selectedPoll, setSelectedPoll] = useState(null);
+  const [endingPollId, setEndingPollId] = useState(null);
+  const [error, setError] = useState("");
+
+  const handleEndPoll = async (poll) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to end "${poll.title}"? No one will be able to vote after this.`
+    );
+
+    if (!confirmed) return;
+
+    setError("");
+    setEndingPollId(poll.id);
+
+    try {
+      const response = await fetch(
+        `http://localhost:5000/api/polls/${poll.id}/end`,
+        {
+          method: "POST",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to end poll.");
+      }
+
+     
+
+if (onRefresh) {
+  await onRefresh();
+}
+
+alert("Poll ended successfully!");
+    } catch (err) {
+      setError(err.message || "Something went wrong while ending the poll.");
+    } finally {
+      setEndingPollId(null);
+    }
+  };
+
   return (
     <div className="dashboard-content">
       <section className="welcome-section">
         <div>
           <p className="eyebrow">POLL MANAGEMENT</p>
-          <h1>Active Polls</h1>
+          <h1>{pageTitle}</h1>
           <p className="welcome-description">
             Manage your polls and keep track of responses.
           </p>
@@ -26,23 +79,35 @@ function ActivePolls({ polls, onViewPoll }) {
         </div>
       </section>
 
+      {error && (
+        <p className="error-message" role="alert">
+          {error}
+        </p>
+      )}
+
       {polls.length === 0 ? (
         <div className="empty-polls-panel">
           <div className="empty-polls-icon">
             <FileText size={28} />
           </div>
 
-          <h2>No active polls yet</h2>
+          <h2>
+  {pageTitle === "Past Polls"
+    ? "No past polls yet"
+    : "No active polls yet"}
+</h2>
 
           <p>
-            You haven't published any polls. Create your first poll to
-            start collecting responses.
-          </p>
+  {pageTitle === "Past Polls"
+    ? "Completed polls will appear here."
+    : "You haven't published any active polls yet. Create or schedule a poll to get started."}
+</p>
         </div>
       ) : (
         <div className="active-polls-grid">
           {polls.map((poll) => {
             const createdDate = new Date(poll.createdAt);
+            const isEnded = poll.status === "completed";
 
             return (
               <article className="active-poll-card" key={poll.id}>
@@ -51,8 +116,14 @@ function ActivePolls({ polls, onViewPoll }) {
                     <BarChart3 size={21} />
                   </div>
 
-                  <span className="status-pill status-active">
-                    {poll.status}
+                  <span
+                    className={`status-pill ${
+                      isEnded
+                        ? "status-completed"
+                        : `status-${poll.status}`
+                    }`}
+                  >
+                    {isEnded ? "completed" : poll.status}
                   </span>
                 </div>
 
@@ -68,7 +139,9 @@ function ActivePolls({ polls, onViewPoll }) {
                   {poll.options.map((option, index) => (
                     <div className="active-poll-option" key={index}>
                       <span className="option-number">{index + 1}</span>
-                      <span>{option}</span>
+                      <span>
+                        {typeof option === "string" ? option : option.text}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -76,7 +149,7 @@ function ActivePolls({ polls, onViewPoll }) {
                 <div className="active-poll-card-footer">
                   <div>
                     <Users size={15} />
-                    <span>{poll.votes} votes</span>
+                    <span>{poll.votes || 0} votes</span>
                   </div>
 
                   <div>
@@ -92,25 +165,70 @@ function ActivePolls({ polls, onViewPoll }) {
                 </div>
 
                 <div className="active-poll-card-bottom">
-                  <span>
-                    <Clock3 size={14} />
-                    {poll.endTime
-                      ? `Ends ${new Date(poll.endTime).toLocaleString()}`
-                      : "No end date set"}
-                  </span>
+                  <div className="poll-schedule-details">
+                    <span>
+                      <CalendarDays size={14} />
+                      {poll.startTime
+                        ? `Starts: ${new Date(
+                            poll.startTime
+                          ).toLocaleString("en-IN")}`
+                        : "Starts: Immediately"}
+                    </span>
 
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => onViewPoll(poll)}
-                  >
-                    View Poll <ArrowUpRight size={15} />
-                  </button>
+                    <span>
+                      <Clock3 size={14} />
+                      {poll.endTime
+                        ? `Ends: ${new Date(
+                            poll.endTime
+                          ).toLocaleString("en-IN")}`
+                        : "No end date set"}
+                    </span>
+                  </div>
+
+                  <div className="active-poll-actions">
+                    {!isEnded && poll.status === "active" && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleEndPoll(poll)}
+                        disabled={endingPollId === poll.id}
+                      >
+                        <SquareStop size={15} />
+                        {endingPollId === poll.id
+                          ? "Ending..."
+                          : "End Poll"}
+                      </button>
+                    )}
+
+                    <button
+                      className="text-button share-poll-button"
+                      type="button"
+                      onClick={() => setSelectedPoll(poll)}
+                    >
+                      <Share2 size={15} />
+                      Share
+                    </button>
+
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => onViewPoll(poll)}
+                    >
+                      View Poll <ArrowUpRight size={15} />
+                    </button>
+                  </div>
                 </div>
               </article>
             );
           })}
         </div>
+      )}
+
+      {selectedPoll && (
+        <SharePollModal
+          poll={selectedPoll}
+          onClose={() => setSelectedPoll(null)}
+        />
       )}
     </div>
   );

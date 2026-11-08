@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Routes, Route, useNavigate } from "react-router-dom";
 
 import Sidebar from "./components/Sidebar";
@@ -40,9 +40,12 @@ function DashboardApp() {
     };
   }
 
-  async function fetchPolls() {
-    setLoadingPolls(true);
-    setApiError("");
+  // Fetch the latest poll data from MongoDB.
+  const fetchPolls = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadingPolls(true);
+      setApiError("");
+    }
 
     try {
       const response = await fetch("/api/polls/");
@@ -54,27 +57,45 @@ function DashboardApp() {
       const data = await response.json();
 
       if (data.success) {
-        setPolls(data.polls.map(formatPoll));
+        setPolls((data.polls || []).map(formatPoll));
       } else {
         throw new Error(data.message || "Failed to load polls.");
       }
     } catch (error) {
       console.error("Fetch polls error:", error);
-      setApiError(error.message);
-    } finally {
-      setLoadingPolls(false);
-    }
-  }
 
+      if (!silent) {
+        setApiError(error.message);
+      }
+    } finally {
+      if (!silent) {
+        setLoadingPolls(false);
+      }
+    }
+  }, []);
+
+  // Fetch immediately and refresh automatically every 10 seconds.
   useEffect(() => {
     fetchPolls();
-  }, []);
+
+    const refreshInterval = setInterval(() => {
+      fetchPolls(true);
+    }, 10000);
+
+    return () => {
+      clearInterval(refreshInterval);
+    };
+  }, [fetchPolls]);
 
   function handleNavigation(page) {
     setActivePage(page);
     setSelectedPoll(null);
 
-    if (page === "Active Polls") {
+    if (
+      page === "Dashboard" ||
+      page === "Active Polls" ||
+      page === "Past Polls"
+    ) {
       fetchPolls();
     }
   }
@@ -86,14 +107,25 @@ function DashboardApp() {
       title: newPoll.title,
       description: newPoll.description,
       question: newPoll.title,
+
       options: newPoll.options.map((option) => ({
         text: option,
       })),
+
       settings: {
         allowMultipleAnswers: newPoll.allowMultiple,
         anonymousVoting: newPoll.anonymous,
         showResults: newPoll.showResults,
       },
+
+      // Convert selected local dates into UTC timestamps.
+      startTime: newPoll.startTime
+        ? new Date(newPoll.startTime).toISOString()
+        : null,
+
+      endTime: newPoll.endTime
+        ? new Date(newPoll.endTime).toISOString()
+        : null,
     };
 
     try {
@@ -111,12 +143,7 @@ function DashboardApp() {
         throw new Error(data.message || "Failed to publish poll.");
       }
 
-      const savedPoll = formatPoll(data.poll);
-
-      setPolls((currentPolls) => [
-        savedPoll,
-        ...currentPolls.filter((poll) => poll.id !== savedPoll.id),
-      ]);
+      await fetchPolls(true);
 
       setActivePage("Active Polls");
     } catch (error) {
@@ -205,7 +232,12 @@ function DashboardApp() {
           </div>
         )}
 
-        {activePage === "Dashboard" && <Dashboard />}
+        {activePage === "Dashboard" && (
+          <Dashboard
+            polls={polls}
+            onNavigate={handleNavigation}
+          />
+        )}
 
         {activePage === "Create Poll" && (
           <CreatePoll onPublish={handlePublishPoll} />
@@ -213,9 +245,27 @@ function DashboardApp() {
 
         {activePage === "Active Polls" && (
           <ActivePolls
-            polls={polls}
+            polls={polls.filter(
+              (poll) =>
+                poll.status === "active" ||
+                poll.status === "scheduled"
+            )}
             onViewPoll={handleViewPoll}
             loading={loadingPolls}
+            onRefresh={fetchPolls}
+            pageTitle="Active Polls"
+          />
+        )}
+
+        {activePage === "Past Polls" && (
+          <ActivePolls
+            polls={polls.filter(
+              (poll) => poll.status === "completed"
+            )}
+            onViewPoll={handleViewPoll}
+            loading={loadingPolls}
+            onRefresh={fetchPolls}
+            pageTitle="Past Polls"
           />
         )}
 
@@ -230,6 +280,7 @@ function DashboardApp() {
         {activePage !== "Dashboard" &&
           activePage !== "Create Poll" &&
           activePage !== "Active Polls" &&
+          activePage !== "Past Polls" &&
           activePage !== "Results" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>

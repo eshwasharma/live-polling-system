@@ -84,6 +84,9 @@ func main() {
 	controllers.SetPollCollection(pollCollection)
 	controllers.SetVoteCollection(voteCollection)
 
+	// Start automatic poll scheduling.
+	go startPollScheduler(pollCollection)
+
 	// Connect to Redis.
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
@@ -92,7 +95,10 @@ func main() {
 	})
 
 	// Verify Redis connection.
-	redisCtx, redisCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	redisCtx, redisCancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
 
 	if err := redisClient.Ping(redisCtx).Err(); err != nil {
 		redisCancel()
@@ -101,6 +107,7 @@ func main() {
 
 	redisCancel()
 	log.Println("Successfully connected to Redis!")
+
 	controllers.SetRedisClient(redisClient)
 
 	defer func() {
@@ -127,5 +134,88 @@ func main() {
 
 	if err := router.Run(":5000"); err != nil {
 		log.Fatal("Server failed to start: ", err)
+	}
+}
+
+// startPollScheduler checks poll schedules every 5 seconds.
+func startPollScheduler(collection *mongo.Collection) {
+	log.Println("Automatic poll scheduler started!")
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Run once immediately when the backend starts.
+	updatePollStatuses(collection)
+
+	for range ticker.C {
+		updatePollStatuses(collection)
+	}
+}
+
+// updatePollStatuses activates scheduled polls and completes expired polls.
+func updatePollStatuses(collection *mongo.Collection) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	now := time.Now().UTC()
+
+	// Activate polls whose scheduled start time has arrived.
+	activateResult, err := collection.UpdateMany(
+		ctx,
+		bson.M{
+			"status":    "scheduled",
+			"startTime": bson.M{"$lte": now},
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "active",
+				"updatedAt": now,
+			},
+		},
+	)
+
+	if err != nil {
+		log.Println("Failed to activate scheduled polls:", err)
+		return
+	}
+
+	if activateResult.ModifiedCount > 0 {
+		log.Printf(
+			"Activated %d scheduled poll(s)",
+			activateResult.ModifiedCount,
+		)
+	}
+
+	// Complete active polls whose end time has arrived.
+	completeResult, err := collection.UpdateMany(
+		ctx,
+		bson.M{
+			"status": "active",
+			"endTime": bson.M{
+				"$type": "date",
+				"$lte":  now,
+			},
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "completed",
+				"updatedAt": now,
+			},
+		},
+	)
+
+	if err != nil {
+		log.Println("Failed to complete expired polls:", err)
+		return
+	}
+
+	if completeResult.ModifiedCount > 0 {
+		log.Printf(
+			"Completed %d expired poll(s)",
+			completeResult.ModifiedCount,
+		)
 	}
 }

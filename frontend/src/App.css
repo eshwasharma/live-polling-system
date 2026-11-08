@@ -2517,3 +2517,377 @@
     font-size: 9px;
   }
 }
+
+/* ==============================
+   POLL SHARING MODAL
+================================ */
+
+.share-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(24, 19, 48, 0.65);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.share-modal {
+  width: 100%;
+  max-width: 780px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-radius: 22px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.2);
+  animation: shareModalAppear 0.25s ease;
+}
+
+@keyframes shareModalAppear {
+  from {
+    opacity: 0;
+    transform: translateY(15px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.share-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 28px 30px 22px;
+  border-bottom: 1px solid #eeeaf7;
+}
+
+.share-modal-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #6854df;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+}
+
+.share-modal-header h2 {
+  margin: 10px 0 5px;
+  color: #211b38;
+  font-size: 25px;
+}
+
+.share-modal-header p {
+  margin: 0;
+  color: #858094;
+  font-size: 13px;
+}
+
+.share-modal-close {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 10px;
+  background: #f5f3fa;
+  color: #625b75;
+  cursor: pointer;
+}
+
+.share-modal-close:hover {
+  background: #eeeafd;
+  color: #6854df;
+}
+
+.share-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 30px;
+  padding: 28px 30px;
+}
+
+.share-qr-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.share-qr-preview {
+  width: 290px;
+  max-width: 100%;
+  min-height: 290px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #eeeaf7;
+  border-radius: 20px;
+  padding: 14px;
+  box-shadow: 0 8px 25px rgba(70, 50, 130, 0.08);
+}
+
+.share-qr-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.share-qr-code canvas,
+.share-qr-code svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.share-qr-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 17px;
+  color: #30264f;
+  font-size: 15px;
+}
+
+.share-qr-brand-icon {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #eeeafd;
+  color: #6854df;
+}
+
+.share-qr-caption {
+  margin: 7px 0 17px;
+  color: #8c879b;
+  font-size: 12px;
+}
+
+.share-download-button {
+  width: 100%;
+  max-width: 290px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: none;
+  border-radius: 11px;
+  background: #6854df;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.share-download-button:hover {
+  background: #5140c1;
+}
+
+.share-customization {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.share-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #6854df;
+}
+
+.share-section-heading h3 {
+  margin: 0;
+  color: #302a43;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.share-style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+}
+
+.share-style-option {
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid #eeeaf5;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #625d70;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.share-style-option:hover {
+  border-color: #b7aaf5;
+  background: #faf9ff;
+}
+
+.share-style-selected {
+  border: 1.5px solid #6854df;
+  background: #f6f3ff;
+  color: #5844cb;
+}
+
+.share-style-swatch {
+  width: 35px;
+  height: 35px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+}
+
+.share-style-swatch span {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+}
+
+.share-style-option > svg {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.share-link-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.share-link-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px 6px 12px;
+  border: 1px solid #e8e4f1;
+  border-radius: 10px;
+  background: #faf9fc;
+}
+
+.share-link-input span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #716b80;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-link-input button {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: #eeeafd;
+  color: #6854df;
+  cursor: pointer;
+}
+
+.share-link-input button:hover {
+  background: #ded7ff;
+}
+
+.share-success-message {
+  margin: -5px 0 0;
+  color: #16834b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.share-error-message {
+  margin: 0;
+  color: #dc3545;
+  font-size: 12px;
+}
+
+.share-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 17px 30px;
+  border-top: 1px solid #eeeaf7;
+  background: #fcfbff;
+  border-radius: 0 0 22px 22px;
+}
+
+.share-modal-footer span {
+  color: #9b96a9;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.share-modal-footer button {
+  padding: 9px 22px;
+  border: none;
+  border-radius: 9px;
+  background: #eeeafd;
+  color: #6854df;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.share-modal-footer button:hover {
+  background: #ded7ff;
+}
+
+.active-poll-actions {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.share-poll-button {
+  color: #6854df !important;
+}
+
+/* Responsive layout */
+
+@media (max-width: 650px) {
+  .share-modal {
+    max-height: 92vh;
+  }
+
+  .share-modal-header,
+  .share-modal-body {
+    padding: 20px;
+  }
+
+  .share-modal-body {
+    grid-template-columns: 1fr;
+    gap: 25px;
+  }
+
+  .share-qr-preview {
+    width: 280px;
+    min-height: 280px;
+  }
+
+  .share-modal-footer {
+    padding: 15px 20px;
+  }
+
+  .active-poll-actions {
+    gap: 8px;
+  }
+}

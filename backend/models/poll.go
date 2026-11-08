@@ -14,9 +14,13 @@ type Poll struct {
 	Question    string        `bson:"question" json:"question"`
 	Options     []PollOption  `bson:"options" json:"options"`
 	Settings    PollSettings  `bson:"settings" json:"settings"`
-	Status      string        `bson:"status" json:"status"`
-	CreatedAt   time.Time     `bson:"createdAt" json:"createdAt"`
-	UpdatedAt   time.Time     `bson:"updatedAt" json:"updatedAt"`
+
+	Status    string     `bson:"status" json:"status"`
+	StartTime *time.Time `bson:"startTime,omitempty" json:"startTime,omitempty"`
+	EndTime   *time.Time `bson:"endTime,omitempty" json:"endTime,omitempty"`
+
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 
 type PollOption struct {

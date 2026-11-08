@@ -46,6 +46,9 @@ function PublicVotingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
+  // Keep track of current time for scheduled poll availability.
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
   // Results state.
   const [results, setResults] = useState(null);
   const [loadingResults, setLoadingResults] = useState(false);
@@ -91,6 +94,15 @@ function PublicVotingPage() {
     fetchPoll();
   }, [id]);
 
+  // Update current time every second.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
+
   // Connect to the backend WebSocket for live poll updates.
   useEffect(() => {
     let socket;
@@ -119,14 +131,11 @@ function PublicVotingPage() {
 
           if (data.type !== "results") return;
 
-          // The WebSocket sends the latest complete results from MongoDB.
-          // Support both optionId and id response field names.
           const updatedOptions = (data.options || []).map((option) => ({
             ...option,
             optionId: option.optionId || option.id,
           }));
 
-          // Update the total vote count immediately.
           setPoll((currentPoll) => {
             if (!currentPoll) return currentPoll;
 
@@ -136,7 +145,6 @@ function PublicVotingPage() {
             };
           });
 
-          // Update result bars only if the user has opened the results.
           setResults((currentResults) => {
             if (!currentResults) return currentResults;
 
@@ -159,7 +167,6 @@ function PublicVotingPage() {
       socket.onclose = () => {
         console.log("Poll WebSocket disconnected:", id);
 
-        // Try to reconnect after 2 seconds.
         if (shouldReconnect) {
           reconnectTimer = setTimeout(() => {
             connectWebSocket();
@@ -180,8 +187,34 @@ function PublicVotingPage() {
     };
   }, [id]);
 
+  // Determine whether the poll is currently accepting votes.
+  const startTime = poll?.startTime
+    ? new Date(poll.startTime).getTime()
+    : null;
+
+  const endTime = poll?.endTime
+    ? new Date(poll.endTime).getTime()
+    : null;
+
+  const isBeforeStart =
+    startTime !== null && currentTime < startTime;
+
+  const isAfterEnd =
+    endTime !== null && currentTime >= endTime;
+
+  const isScheduled =
+    poll?.status === "scheduled" || isBeforeStart;
+
+  const isCompleted =
+    poll?.status === "completed" || isAfterEnd;
+
+  const canVote =
+    poll?.status === "active" &&
+    !isBeforeStart &&
+    !isAfterEnd;
+
   function handleOptionChange(optionId) {
-    if (hasVoted || submitting) return;
+    if (!canVote || hasVoted || submitting) return;
 
     setMessage("");
 
@@ -199,7 +232,12 @@ function PublicVotingPage() {
   async function handleSubmitVote(event) {
     event.preventDefault();
 
-    if (hasVoted || submitting) return;
+    if (!canVote || hasVoted || submitting) {
+      if (!canVote) {
+        setMessage("This poll is not currently accepting votes.");
+      }
+      return;
+    }
 
     if (hasBrowserVoted(id)) {
       setHasVoted(true);
@@ -230,7 +268,6 @@ function PublicVotingPage() {
 
       const data = await response.json();
 
-      // Backend detected an existing vote.
       if (response.status === 409) {
         saveVotedStatus(id);
         setHasVoted(true);
@@ -242,13 +279,10 @@ function PublicVotingPage() {
         throw new Error(data.message || "Unable to submit your vote.");
       }
 
-      // Save voting status after successful submission.
       saveVotedStatus(id);
       setHasVoted(true);
       setMessage("");
 
-      // Update the displayed vote count.
-      // The WebSocket will also synchronize the latest count.
       setPoll((currentPoll) => ({
         ...currentPoll,
         votes: currentPoll.votes + 1,
@@ -336,7 +370,7 @@ function PublicVotingPage() {
             <span>
               <Clock3 size={15} />
               {poll.endTime
-                ? `Ends ${new Date(poll.endTime).toLocaleDateString()}`
+                ? `Ends ${new Date(poll.endTime).toLocaleDateString("en-IN")}`
                 : "No end date"}
             </span>
           </div>
@@ -352,6 +386,24 @@ function PublicVotingPage() {
             </span>
           </div>
 
+          {/* Scheduled poll message */}
+          {isScheduled && (
+            <div className="vote-validation-message" role="status">
+              <Clock3 size={17} />
+              This poll hasn't started yet. Voting will be available from{" "}
+              {poll.startTime
+                ? new Date(poll.startTime).toLocaleString("en-IN")
+                : "its scheduled start time"}.
+            </div>
+          )}
+
+          {/* Completed poll message */}
+          {isCompleted && (
+            <div className="vote-validation-message" role="status">
+              This poll has ended. Voting is now closed.
+            </div>
+          )}
+
           <form onSubmit={handleSubmitVote}>
             <div className="voting-options">
               {poll.options.map((option, index) => {
@@ -361,7 +413,7 @@ function PublicVotingPage() {
                   <button
                     type="button"
                     key={option.id || index}
-                    disabled={hasVoted || submitting}
+                    disabled={!canVote || hasVoted || submitting}
                     className={`voting-option ${
                       isSelected ? "voting-option-selected" : ""
                     }`}
@@ -413,7 +465,7 @@ function PublicVotingPage() {
                 <button
                   type="submit"
                   className="primary-button submit-vote-button"
-                  disabled={submitting}
+                  disabled={!canVote || submitting}
                 >
                   <Send size={16} />
                   {submitting ? "Submitting..." : "Submit Vote"}
