@@ -15,7 +15,6 @@ import {
   CalendarDays,
   Users,
   Clock3,
-  Share2,
   CheckCircle2,
 } from "lucide-react";
 
@@ -107,6 +106,48 @@ function PollSettings({ poll, onBack, onRefresh }) {
       setSuccess("Poll ended successfully!");
     } catch (err) {
       console.error("End poll error:", err);
+      setError(err.message || "Something went wrong.");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // Restart the selected completed poll.
+  // A new poll is created while the original poll and its votes are preserved.
+  const handleRestartPoll = async () => {
+    const confirmed = window.confirm(
+      `Restart "${poll.title}"? A new poll will be created with the same question and options. Previous voting results will be preserved.`
+    );
+
+    if (!confirmed) return;
+
+    setProcessing(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const response = await fetch(
+        `/api/polls/${poll.id}/restart`,
+        {
+          method: "POST",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Failed to restart poll.");
+      }
+
+      if (onRefresh) {
+        await onRefresh();
+      }
+
+      setSuccess(
+        "Poll restarted successfully! A new poll has been created with zero votes. Previous results are preserved."
+      );
+    } catch (err) {
+      console.error("Restart poll error:", err);
       setError(err.message || "Something went wrong.");
     } finally {
       setProcessing(false);
@@ -287,9 +328,21 @@ function PollSettings({ poll, onBack, onRefresh }) {
               </div>
             </div>
 
-            <span className="poll-settings-coming-soon">
-              Coming next
-            </span>
+            {isCompleted ? (
+              <button
+                className="poll-settings-primary-button"
+                type="button"
+                onClick={handleRestartPoll}
+                disabled={processing}
+              >
+                <RotateCcw size={15} />
+                {processing ? "Please wait..." : "Restart Poll"}
+              </button>
+            ) : (
+              <span className="poll-settings-disabled-label">
+                Available after poll ends
+              </span>
+            )}
           </div>
         </div>
       </section>

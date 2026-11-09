@@ -785,3 +785,98 @@ func ResumePoll(c *gin.Context) {
 		"message": "Poll resumed successfully",
 	})
 }
+// RestartPoll creates a fresh round of an existing completed poll.
+// The original poll and its voting history remain unchanged.
+func RestartPoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	// Validate the original poll ID.
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Retrieve the original poll.
+	var originalPoll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&originalPoll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve original poll",
+		})
+		return
+	}
+
+	// Only completed polls can be restarted.
+	if originalPoll.Status != "completed" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Only completed polls can be restarted",
+		})
+		return
+	}
+
+	now := time.Now()
+
+	// Generate fresh option IDs.
+	newOptions := make([]models.PollOption, 0, len(originalPoll.Options))
+
+	for _, option := range originalPoll.Options {
+		newOptions = append(newOptions, models.PollOption{
+			ID:   bson.NewObjectID().Hex(),
+			Text: option.Text,
+		})
+	}
+
+	// Create a new poll using the original poll's details.
+	newPoll := models.Poll{
+		ID:          bson.NewObjectID(),
+		Title:       originalPoll.Title,
+		Description: originalPoll.Description,
+		Question:    originalPoll.Question,
+		Options:     newOptions,
+		Settings:    originalPoll.Settings,
+		Status:      "active",
+		StartTime:   nil,
+		EndTime:     nil,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	// Save the new poll. The original poll and votes are untouched.
+	_, err = PollCollection.InsertOne(ctx, newPoll)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to restart poll",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"success": true,
+		"message": "Poll restarted successfully",
+		"poll":    newPoll,
+	})
+}
