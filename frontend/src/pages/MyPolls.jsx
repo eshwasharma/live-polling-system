@@ -10,6 +10,7 @@ import {
   ArrowUpRight,
   FileText,
   Filter,
+  Settings,
 } from "lucide-react";
 
 import SharePollModal from "../components/SharePollModal";
@@ -18,6 +19,8 @@ function MyPolls({
   polls = [],
   onViewPoll,
   onViewResults,
+  onOpenSettings,
+  onRefresh,
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -39,6 +42,7 @@ function MyPolls({
   const statusCounts = {
     all: polls.length,
     active: polls.filter((poll) => poll.status === "active").length,
+    paused: polls.filter((poll) => poll.status === "paused").length,
     scheduled: polls.filter((poll) => poll.status === "scheduled").length,
     completed: polls.filter((poll) => poll.status === "completed").length,
   };
@@ -63,6 +67,7 @@ function MyPolls({
       <section className="my-polls-toolbar">
         <div className="my-polls-search">
           <Search size={18} />
+
           <input
             type="text"
             placeholder="Search polls by title or description..."
@@ -73,6 +78,7 @@ function MyPolls({
 
         <div className="my-polls-filter">
           <Filter size={17} />
+
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
@@ -80,6 +86,7 @@ function MyPolls({
           >
             <option value="all">All Polls</option>
             <option value="active">Active</option>
+            <option value="paused">Paused</option>
             <option value="scheduled">Scheduled</option>
             <option value="completed">Completed</option>
           </select>
@@ -90,6 +97,7 @@ function MyPolls({
         {[
           { value: "all", label: "All Polls" },
           { value: "active", label: "Active" },
+          { value: "paused", label: "Paused" },
           { value: "scheduled", label: "Scheduled" },
           { value: "completed", label: "Completed" },
         ].map((filter) => (
@@ -141,9 +149,7 @@ function MyPolls({
                     <BarChart3 size={21} />
                   </div>
 
-                  <span
-                    className={`status-pill status-${poll.status}`}
-                  >
+                  <span className={`status-pill status-${poll.status}`}>
                     {poll.status}
                   </span>
                 </div>
@@ -160,6 +166,7 @@ function MyPolls({
                   {(poll.options || []).map((option, index) => (
                     <div className="active-poll-option" key={index}>
                       <span className="option-number">{index + 1}</span>
+
                       <span>
                         {typeof option === "string"
                           ? option
@@ -210,6 +217,16 @@ function MyPolls({
                   </div>
 
                   <div className="active-poll-actions">
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => onOpenSettings?.(poll)}
+                      title="Poll Settings"
+                    >
+                      <Settings size={15} />
+                      Settings
+                    </button>
+
                     <button
                       className="text-button share-poll-button"
                       type="button"

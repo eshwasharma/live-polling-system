@@ -1,4 +1,3 @@
-
 package controllers
 
 import (
@@ -627,7 +626,64 @@ func GetPollResults(c *gin.Context) {
 }
 
 // EndPoll manually ends an active poll.
+
+// EndPoll manually ends an active or paused poll.
 func EndPoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Allow both active and paused polls to be ended.
+	result, err := PollCollection.UpdateOne(
+		ctx,
+		bson.M{
+			"_id": objectID,
+			"status": bson.M{
+				"$in": []string{"active", "paused"},
+			},
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "completed",
+				"updatedAt": time.Now(),
+			},
+		},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to end poll",
+		})
+		return
+	}
+
+	if result.MatchedCount == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Poll not found or cannot be ended",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll ended successfully",
+	})
+}
+
+// PausePoll temporarily pauses an active poll.
+func PausePoll(c *gin.Context) {
 	pollID := c.Param("id")
 
 	objectID, err := bson.ObjectIDFromHex(pollID)
@@ -650,7 +706,7 @@ func EndPoll(c *gin.Context) {
 		},
 		bson.M{
 			"$set": bson.M{
-				"status":    "completed",
+				"status":    "paused",
 				"updatedAt": time.Now(),
 			},
 		},
@@ -659,7 +715,7 @@ func EndPoll(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Failed to end poll",
+			"message": "Failed to pause poll",
 		})
 		return
 	}
@@ -674,6 +730,58 @@ func EndPoll(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Poll ended successfully",
+		"message": "Poll paused successfully",
+	})
+}
+
+// ResumePoll resumes a paused poll.
+func ResumePoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	result, err := PollCollection.UpdateOne(
+		ctx,
+		bson.M{
+			"_id":    objectID,
+			"status": "paused",
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "active",
+				"updatedAt": time.Now(),
+			},
+		},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to resume poll",
+		})
+		return
+	}
+
+	if result.MatchedCount == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Poll not found or is not currently paused",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll resumed successfully",
 	})
 }

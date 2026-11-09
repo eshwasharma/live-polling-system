@@ -14,7 +14,12 @@ func PollRoutes(router *gin.Engine) {
 		pollGroup.GET("/", controllers.GetAllPolls)
 		pollGroup.GET("/:id", controllers.GetPollByID)
 		pollGroup.POST("/:id/votes", controllers.SubmitVote)
+
+		// Poll management routes
+		pollGroup.POST("/:id/pause", controllers.PausePoll)
+		pollGroup.POST("/:id/resume", controllers.ResumePoll)
 		pollGroup.POST("/:id/end", controllers.EndPoll)
+
 		pollGroup.GET("/:id/results", controllers.GetPollResults)
 
 		// WebSocket route for live poll updates

@@ -9,6 +9,7 @@ import CreatePoll from "./pages/CreatePoll";
 import ActivePolls from "./pages/ActivePolls";
 import MyPolls from "./pages/MyPolls";
 import ResultsPage from "./pages/ResultsPage";
+import PollSettings from "./pages/PollSettings";
 import PublicVotingPage from "./pages/PublicVotingPage";
 
 import "./App.css";
@@ -161,6 +162,13 @@ function DashboardApp() {
     navigate(`/poll/${poll.id}`);
   }
 
+  // Open settings for the selected poll.
+  function handleOpenPollSettings(poll) {
+    setSelectedPoll(poll);
+    setActivePage("Poll Settings");
+    setApiError("");
+  }
+
   // Fetch results for the poll selected from My Polls.
   async function handleViewResults(poll) {
     if (!poll) return;
@@ -264,6 +272,19 @@ function DashboardApp() {
             polls={polls}
             onViewPoll={handleViewPoll}
             onViewResults={handleViewResults}
+            onOpenSettings={handleOpenPollSettings}
+            onRefresh={fetchPolls}
+          />
+        )}
+
+        {activePage === "Poll Settings" && currentPoll && (
+          <PollSettings
+            poll={currentPoll}
+            onBack={() => {
+              setActivePage("My Polls");
+              fetchPolls();
+            }}
+            onRefresh={fetchPolls}
           />
         )}
 
@@ -280,6 +301,7 @@ function DashboardApp() {
           activePage !== "Active Polls" &&
           activePage !== "Past Polls" &&
           activePage !== "My Polls" &&
+          activePage !== "Poll Settings" &&
           activePage !== "Results" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>
