@@ -2,10 +2,13 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/genai"
@@ -46,6 +49,8 @@ func GenerateAIPoll(c *gin.Context) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 
 	if apiKey == "" {
+		log.Println("AI Error: GEMINI_API_KEY is not configured")
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Gemini API key is not configured.",
@@ -53,13 +58,19 @@ func GenerateAIPoll(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	// Give the Gemini request a maximum of 60 seconds.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
 
+	// Explicitly configure the Gemini Developer API backend.
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: apiKey,
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
 	})
 
 	if err != nil {
+		log.Printf("AI Error: Failed to initialize Gemini client: %v", err)
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to initialize Gemini.",
@@ -91,7 +102,9 @@ Rules:
 		[]*genai.Content{
 			{
 				Parts: []*genai.Part{
-					{Text: instructions + "\n\nUser prompt: " + prompt},
+					{
+						Text: instructions + "\n\nUser prompt: " + prompt,
+					},
 				},
 			},
 		},
@@ -99,6 +112,8 @@ Rules:
 	)
 
 	if err != nil {
+		log.Printf("AI Error: Gemini generation failed: %v", err)
+
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
 			"message": "Gemini could not generate the poll. Please try again.",
@@ -106,7 +121,9 @@ Rules:
 		return
 	}
 
-	if result == nil || result.Text() == "" {
+	if result == nil || strings.TrimSpace(result.Text()) == "" {
+		log.Println("AI Error: Gemini returned an empty response")
+
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
 			"message": "Gemini returned an empty response.",
@@ -115,6 +132,8 @@ Rules:
 	}
 
 	responseText := strings.TrimSpace(result.Text())
+
+	// Remove Markdown code fences if Gemini includes them.
 	responseText = strings.TrimPrefix(responseText, "```json")
 	responseText = strings.TrimPrefix(responseText, "```")
 	responseText = strings.TrimSuffix(responseText, "```")
@@ -123,6 +142,8 @@ Rules:
 	var generatedPoll GeneratedPoll
 
 	if err := json.Unmarshal([]byte(responseText), &generatedPoll); err != nil {
+		log.Printf("AI Error: Invalid JSON returned by Gemini: %v", err)
+
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
 			"message": "Gemini returned an invalid poll format. Please try again.",
@@ -130,16 +151,38 @@ Rules:
 		return
 	}
 
-	if strings.TrimSpace(generatedPoll.Title) == "" ||
-		strings.TrimSpace(generatedPoll.Question) == "" ||
+	// Validate generated poll.
+	generatedPoll.Title = strings.TrimSpace(generatedPoll.Title)
+	generatedPoll.Description = strings.TrimSpace(generatedPoll.Description)
+	generatedPoll.Question = strings.TrimSpace(generatedPoll.Question)
+
+	if generatedPoll.Title == "" ||
+		generatedPoll.Question == "" ||
 		len(generatedPoll.Options) < 2 ||
 		len(generatedPoll.Options) > 6 {
+
+		log.Println("AI Error: Gemini generated an incomplete poll")
+
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
 			"message": "Gemini generated an incomplete poll. Please try again.",
 		})
 		return
 	}
+
+	for i := range generatedPoll.Options {
+		generatedPoll.Options[i] = strings.TrimSpace(generatedPoll.Options[i])
+
+		if generatedPoll.Options[i] == "" {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"success": false,
+				"message": "Gemini generated an empty poll option.",
+			})
+			return
+		}
+	}
+
+	log.Println("AI poll generated successfully")
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

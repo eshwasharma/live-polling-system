@@ -75,44 +75,68 @@ func CreatePoll(c *gin.Context) {
 		poll.Options[i].ID = bson.NewObjectID().Hex()
 	}
 
-	
-// Set poll details and validate the schedule.
-now := time.Now()
+	// Set poll details and validate the schedule.
+	now := time.Now()
 
-// The end time must be later than the start time.
-if poll.StartTime != nil && poll.EndTime != nil {
-	if !poll.EndTime.After(*poll.StartTime) {
+	// The end time must be later than the start time.
+	if poll.StartTime != nil && poll.EndTime != nil {
+		if !poll.EndTime.After(*poll.StartTime) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Poll end time must be later than its start time",
+			})
+			return
+		}
+	}
+
+	// Do not allow a poll to be created with an end time in the past.
+	if poll.EndTime != nil && !poll.EndTime.After(now) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Poll end time must be later than its start time",
+			"message": "Poll end time must be in the future",
 		})
 		return
 	}
-}
 
-// Do not allow a poll to be created with an end time in the past.
-if poll.EndTime != nil && !poll.EndTime.After(now) {
-	c.JSON(http.StatusBadRequest, gin.H{
-		"success": false,
-		"message": "Poll end time must be in the future",
-	})
-	return
-}
+	// Generate poll ID.
+	poll.ID = bson.NewObjectID()
 
-// Generate poll ID.
-poll.ID = bson.NewObjectID()
+	// Attach the authenticated creator as the poll owner.
+	userIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Authentication required",
+		})
+		return
+	}
 
-// Future start time means the poll is scheduled.
-// Otherwise, the poll becomes active immediately.
-poll.Status = "active"
+	ownerID, ok := userIDValue.(bson.ObjectID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Invalid user session",
+		})
+		return
+	}
 
-if poll.StartTime != nil && poll.StartTime.After(now) {
-	poll.Status = "scheduled"
-}
+	poll.OwnerID = ownerID
 
-poll.CreatedAt = now
-poll.UpdatedAt = now
+	// Future start time means the poll is scheduled.
+	// Otherwise, the poll becomes active immediately.
+	poll.Status = "active"
 
+	if poll.StartTime != nil && poll.StartTime.After(now) {
+		poll.Status = "scheduled"
+	}
+
+	poll.CreatedAt = now
+	poll.UpdatedAt = now
+	poll.Round = 1
+
+	if poll.Settings.LinkExpiration == "" {
+		poll.Settings.LinkExpiration = "never"
+	}
 
 	// Save poll in MongoDB.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -141,10 +165,28 @@ func GetAllPolls(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	// Fetch all polls, newest first.
+	// Fetch only the authenticated creator's polls, newest first.
+	userIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Authentication required",
+		})
+		return
+	}
+
+	ownerID, ok := userIDValue.(bson.ObjectID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Invalid user session",
+		})
+		return
+	}
+
 	cursor, err := PollCollection.Find(
 		ctx,
-		bson.D{},
+		bson.M{"ownerId": ownerID},
 		options.Find().SetSort(bson.D{
 			{Key: "createdAt", Value: -1},
 		}),
@@ -210,6 +252,38 @@ func GetAllPolls(c *gin.Context) {
 	})
 }
 
+// isPollLinkExpired checks whether a poll's public link has expired.
+// Expiration is calculated from the poll creation date.
+func isPollLinkExpired(poll models.Poll, now time.Time) bool {
+	expiration := poll.Settings.LinkExpiration
+
+	// Support older documents that may have used the top-level field.
+	if expiration == "" {
+		expiration = poll.LinkExpiration
+	}
+
+	var duration time.Duration
+
+	switch expiration {
+	case "", "never":
+		return false
+	case "1-day":
+		duration = 24 * time.Hour
+	case "7-days":
+		duration = 7 * 24 * time.Hour
+	case "30-days":
+		duration = 30 * 24 * time.Hour
+	default:
+		// Unknown legacy values should not unexpectedly disable a poll.
+		return false
+	}
+
+	if poll.CreatedAt.IsZero() {
+		return false
+	}
+
+	return !now.Before(poll.CreatedAt.Add(duration))
+}
 
 // GetPollByID retrieves a single poll using its MongoDB ID.
 func GetPollByID(c *gin.Context) {
@@ -250,6 +324,14 @@ func GetPollByID(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	if isPollLinkExpired(poll, time.Now()) {
+		c.JSON(http.StatusGone, gin.H{
+			"success": false,
+			"message": "This poll link has expired",
 		})
 		return
 	}
@@ -337,10 +419,18 @@ func SubmitVote(c *gin.Context) {
 		return
 	}
 
-	
-	// Check whether the poll is active and within its scheduled time.
+	// Check whether the poll link has expired.
 	now := time.Now()
 
+	if isPollLinkExpired(poll, now) {
+		c.JSON(http.StatusGone, gin.H{
+			"success": false,
+			"message": "This poll link has expired",
+		})
+		return
+	}
+
+	// Check whether the poll is active and within its scheduled time.
 	if poll.Status != "active" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -364,7 +454,6 @@ func SubmitVote(c *gin.Context) {
 		})
 		return
 	}
-
 
 	// Check single-choice and multiple-choice settings.
 	if !poll.Settings.AllowMultipleAnswers && len(request.OptionIDs) != 1 {
@@ -785,12 +874,15 @@ func ResumePoll(c *gin.Context) {
 		"message": "Poll resumed successfully",
 	})
 }
+
 // RestartPoll creates a fresh round of an existing completed poll.
 // The original poll and its voting history remain unchanged.
+
+// RestartPoll starts a fresh voting round using the same poll ID and link.
+
 func RestartPoll(c *gin.Context) {
 	pollID := c.Param("id")
 
-	// Validate the original poll ID.
 	objectID, err := bson.ObjectIDFromHex(pollID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -803,7 +895,482 @@ func RestartPoll(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	// Retrieve the original poll.
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	if poll.Status != "completed" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Only completed polls can be restarted",
+		})
+		return
+	}
+
+	// Remove previous voting records.
+	_, err = VoteCollection.DeleteMany(
+		ctx,
+		bson.M{"pollId": objectID},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to clear previous votes",
+		})
+		return
+	}
+
+	now := time.Now()
+
+	// Restart the same poll and increment its voting round.
+	_, err = PollCollection.UpdateOne(
+		ctx,
+		bson.M{"_id": objectID},
+		bson.M{
+			"$set": bson.M{
+				"status":    "active",
+				"startTime": nil,
+				"endTime":   nil,
+				"updatedAt": now,
+			},
+			"$inc": bson.M{
+				"round": 1,
+			},
+		},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Votes were cleared, but the poll could not be restarted",
+		})
+		return
+	}
+
+	// Clear Redis counters and notify connected WebSocket clients.
+	if RedisClient != nil {
+		redisCtx, redisCancel := context.WithTimeout(
+			c.Request.Context(),
+			3*time.Second,
+		)
+
+		err = RedisClient.Del(
+			redisCtx,
+			"poll:"+pollID+":totalVotes",
+			"poll:"+pollID+":optionVotes",
+		).Err()
+
+		if err != nil {
+			log.Println("Failed to clear Redis counters during restart:", err)
+		}
+
+		_, publishErr := RedisClient.Publish(
+			redisCtx,
+			"poll:"+pollID+":votes",
+			`{"type":"results"}`,
+		).Result()
+
+		if publishErr != nil {
+			log.Println("Failed to publish poll restart event:", publishErr)
+		}
+
+		redisCancel()
+	}
+
+	var restartedPoll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&restartedPoll)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Poll restarted, but failed to retrieve its updated details",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll restarted successfully",
+		"poll":    restartedPoll,
+	})
+}
+
+// UpdatePollSettings updates the voting settings and schedule of an existing poll.
+
+// UpdatePollSettings updates only the voting settings.
+// Poll schedule remains managed by the Create Poll page.
+func UpdatePollSettings(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	var request struct {
+		AllowMultipleAnswers *bool   `json:"allowMultipleAnswers"`
+		AnonymousVoting      *bool   `json:"anonymousVoting"`
+		ShowResults          *string `json:"showResults"`
+		LinkExpiration       *string `json:"linkExpiration"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll settings",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	if request.ShowResults != nil {
+		if *request.ShowResults != "after-voting" &&
+			*request.ShowResults != "always" &&
+			*request.ShowResults != "after-end" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Invalid results visibility setting",
+			})
+			return
+		}
+	}
+
+	if request.LinkExpiration != nil {
+		if *request.LinkExpiration != "never" &&
+			*request.LinkExpiration != "1-day" &&
+			*request.LinkExpiration != "7-days" &&
+			*request.LinkExpiration != "30-days" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Invalid link expiration setting",
+			})
+			return
+		}
+	}
+
+	voteCount, err := VoteCollection.CountDocuments(
+		ctx,
+		bson.M{"pollId": objectID},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to check existing votes",
+		})
+		return
+	}
+
+	if request.AllowMultipleAnswers != nil &&
+		*request.AllowMultipleAnswers != poll.Settings.AllowMultipleAnswers &&
+		voteCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Multiple-answer settings cannot be changed after votes have been submitted",
+		})
+		return
+	}
+
+	updates := bson.M{
+		"updatedAt": time.Now(),
+	}
+
+	if request.AllowMultipleAnswers != nil {
+		updates["settings.allowMultipleAnswers"] = *request.AllowMultipleAnswers
+	}
+
+	if request.AnonymousVoting != nil {
+		updates["settings.anonymousVoting"] = *request.AnonymousVoting
+	}
+
+	if request.ShowResults != nil {
+		updates["settings.showResults"] = *request.ShowResults
+	}
+
+	if request.LinkExpiration != nil {
+		updates["settings.linkExpiration"] = *request.LinkExpiration
+	}
+
+	_, err = PollCollection.UpdateOne(
+		ctx,
+		bson.M{"_id": objectID},
+		bson.M{"$set": updates},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to update poll settings",
+		})
+		return
+	}
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Settings were saved, but the updated poll could not be retrieved",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll settings updated successfully",
+		"poll":    poll,
+	})
+}
+
+// UpdatePoll edits an existing poll.
+func UpdatePoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	var request struct {
+		Title       string              `json:"title"`
+		Description string              `json:"description"`
+		Question    string              `json:"question"`
+		Options     []models.PollOption `json:"options"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll data",
+		})
+		return
+	}
+
+	request.Title = strings.TrimSpace(request.Title)
+	request.Description = strings.TrimSpace(request.Description)
+	request.Question = strings.TrimSpace(request.Question)
+
+	if request.Title == "" || request.Question == "" || len(request.Options) < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Title, question, and at least two options are required",
+		})
+		return
+	}
+
+	// Validate options and ensure their IDs are unique.
+	seenIDs := make(map[string]bool)
+
+	for i := range request.Options {
+		request.Options[i].Text = strings.TrimSpace(request.Options[i].Text)
+
+		if request.Options[i].Text == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Poll options cannot be empty",
+			})
+			return
+		}
+
+		if request.Options[i].ID == "" {
+			request.Options[i].ID = bson.NewObjectID().Hex()
+		}
+
+		if seenIDs[request.Options[i].ID] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Duplicate option IDs are not allowed",
+			})
+			return
+		}
+
+		seenIDs[request.Options[i].ID] = true
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	var existingPoll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&existingPoll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	// Check whether votes already exist.
+	voteCount, err := VoteCollection.CountDocuments(
+		ctx,
+		bson.M{"pollId": objectID},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to check existing votes",
+		})
+		return
+	}
+
+	// Existing votes refer to option IDs. Do not change options
+	// once votes have been submitted.
+	if voteCount > 0 {
+		sameOptions := len(request.Options) == len(existingPoll.Options)
+
+		if sameOptions {
+			for i, option := range request.Options {
+				if option.ID != existingPoll.Options[i].ID ||
+					option.Text != existingPoll.Options[i].Text {
+					sameOptions = false
+					break
+				}
+			}
+		}
+
+		if !sameOptions {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Answer options cannot be changed after votes have been submitted",
+			})
+			return
+		}
+	}
+
+	_, err = PollCollection.UpdateOne(
+		ctx,
+		bson.M{"_id": objectID},
+		bson.M{
+			"$set": bson.M{
+				"title":       request.Title,
+				"description": request.Description,
+				"question":    request.Question,
+				"options":     request.Options,
+				"updatedAt":   time.Now(),
+			},
+		},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to update poll",
+		})
+		return
+	}
+
+	var updatedPoll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&updatedPoll)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Poll updated, but failed to retrieve updated details",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll updated successfully",
+		"poll":    updatedPoll,
+	})
+}
+
+// DuplicatePoll creates a new poll using the details of an existing poll.
+func DuplicatePoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
 	var originalPoll models.Poll
 
 	err = PollCollection.FindOne(
@@ -822,23 +1389,12 @@ func RestartPoll(c *gin.Context) {
 
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Failed to retrieve original poll",
+			"message": "Failed to retrieve poll",
 		})
 		return
 	}
 
-	// Only completed polls can be restarted.
-	if originalPoll.Status != "completed" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Only completed polls can be restarted",
-		})
-		return
-	}
-
-	now := time.Now()
-
-	// Generate fresh option IDs.
+	// Give the duplicate its own option IDs and a fresh voting round.
 	newOptions := make([]models.PollOption, 0, len(originalPoll.Options))
 
 	for _, option := range originalPoll.Options {
@@ -848,10 +1404,12 @@ func RestartPoll(c *gin.Context) {
 		})
 	}
 
-	// Create a new poll using the original poll's details.
+	now := time.Now()
+
 	newPoll := models.Poll{
 		ID:          bson.NewObjectID(),
-		Title:       originalPoll.Title,
+		OwnerID:     originalPoll.OwnerID,
+		Title:       originalPoll.Title + " (Copy)",
 		Description: originalPoll.Description,
 		Question:    originalPoll.Question,
 		Options:     newOptions,
@@ -863,20 +1421,115 @@ func RestartPoll(c *gin.Context) {
 		UpdatedAt:   now,
 	}
 
-	// Save the new poll. The original poll and votes are untouched.
 	_, err = PollCollection.InsertOne(ctx, newPoll)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Failed to restart poll",
+			"message": "Failed to duplicate poll",
 		})
 		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
-		"message": "Poll restarted successfully",
+		"message": "Poll duplicated successfully",
 		"poll":    newPoll,
+	})
+}
+
+// DeletePoll permanently deletes a poll and its associated votes.
+func DeletePoll(c *gin.Context) {
+	pollID := c.Param("id")
+
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Confirm that the poll exists.
+	var poll models.Poll
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": objectID},
+	).Decode(&poll)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Poll not found",
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to retrieve poll",
+		})
+		return
+	}
+
+	// Delete the poll document.
+	_, err = PollCollection.DeleteOne(
+		ctx,
+		bson.M{"_id": objectID},
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to delete poll",
+		})
+		return
+	}
+
+	// Delete all votes belonging to this poll.
+	_, err = VoteCollection.DeleteMany(
+		ctx,
+		bson.M{"pollId": objectID},
+	)
+
+	if err != nil {
+		log.Println("Failed to delete votes for deleted poll:", err)
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Poll was deleted, but its vote records could not be deleted",
+		})
+		return
+	}
+
+	// Remove cached Redis counters.
+	if RedisClient != nil {
+		redisCtx, redisCancel := context.WithTimeout(
+			c.Request.Context(),
+			3*time.Second,
+		)
+
+		err = RedisClient.Del(
+			redisCtx,
+			"poll:"+pollID+":totalVotes",
+			"poll:"+pollID+":optionVotes",
+		).Err()
+
+		if err != nil {
+			log.Println("Failed to clear Redis data for deleted poll:", err)
+		}
+
+		redisCancel()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Poll deleted successfully",
 	})
 }

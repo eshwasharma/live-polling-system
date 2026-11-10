@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import SharePollModal from "../components/SharePollModal";
+import { apiFetch } from "../utils/api";
 
 function ActivePolls({
   polls,
@@ -35,8 +36,8 @@ function ActivePolls({
     setEndingPollId(poll.id);
 
     try {
-      const response = await fetch(
-        `http://localhost:5000/api/polls/${poll.id}/end`,
+      const response = await apiFetch(
+        `/api/polls/${poll.id}/end`,
         {
           method: "POST",
         }
@@ -44,19 +45,19 @@ function ActivePolls({
 
       const data = await response.json();
 
-      if (!response.ok) {
+      if (!response.ok || !data.success) {
         throw new Error(data.message || "Failed to end poll.");
       }
 
-     
+      if (onRefresh) {
+        await onRefresh();
+      }
 
-if (onRefresh) {
-  await onRefresh();
-}
-
-alert("Poll ended successfully!");
+      alert("Poll ended successfully!");
     } catch (err) {
-      setError(err.message || "Something went wrong while ending the poll.");
+      setError(
+        err.message || "Something went wrong while ending the poll."
+      );
     } finally {
       setEndingPollId(null);
     }
@@ -92,16 +93,16 @@ alert("Poll ended successfully!");
           </div>
 
           <h2>
-  {pageTitle === "Past Polls"
-    ? "No past polls yet"
-    : "No active polls yet"}
-</h2>
+            {pageTitle === "Past Polls"
+              ? "No past polls yet"
+              : "No active polls yet"}
+          </h2>
 
           <p>
-  {pageTitle === "Past Polls"
-    ? "Completed polls will appear here."
-    : "You haven't published any active polls yet. Create or schedule a poll to get started."}
-</p>
+            {pageTitle === "Past Polls"
+              ? "Completed polls will appear here."
+              : "You haven't published any active polls yet. Create or schedule a poll to get started."}
+          </p>
         </div>
       ) : (
         <div className="active-polls-grid">
@@ -138,9 +139,13 @@ alert("Poll ended successfully!");
 
                   {poll.options.map((option, index) => (
                     <div className="active-poll-option" key={index}>
-                      <span className="option-number">{index + 1}</span>
+                      <span className="option-number">
+                        {index + 1}
+                      </span>
                       <span>
-                        {typeof option === "string" ? option : option.text}
+                        {typeof option === "string"
+                          ? option
+                          : option.text}
                       </span>
                     </div>
                   ))}

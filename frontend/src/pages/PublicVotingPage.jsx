@@ -11,9 +11,13 @@ import {
   BarChart3,
 } from "lucide-react";
 
-// Generate or retrieve the same voter ID for this poll and browser.
-function getVoterId(pollId) {
-  const storageKey = `pulsepoll-voter-${pollId}`;
+// Generate or retrieve a voter ID for a specific poll round.
+// Round 1 keeps the original storage key for compatibility with existing votes.
+function getVoterId(pollId, round = 1) {
+  const storageKey =
+    round <= 1
+      ? `pulsepoll-voter-${pollId}`
+      : `pulsepoll-voter-${pollId}-${round}`;
 
   let savedVoterId = localStorage.getItem(storageKey);
 
@@ -25,14 +29,24 @@ function getVoterId(pollId) {
   return savedVoterId;
 }
 
-// Check whether this browser has already voted in this poll.
-function hasBrowserVoted(pollId) {
-  return localStorage.getItem(`pulsepoll-voted-${pollId}`) === "true";
+// Check whether this browser has already voted in this poll round.
+function hasBrowserVoted(pollId, round = 1) {
+  const storageKey =
+    round <= 1
+      ? `pulsepoll-voted-${pollId}`
+      : `pulsepoll-voted-${pollId}-${round}`;
+
+  return localStorage.getItem(storageKey) === "true";
 }
 
-// Save the voting status in this browser.
-function saveVotedStatus(pollId) {
-  localStorage.setItem(`pulsepoll-voted-${pollId}`, "true");
+// Save the voting status for this poll round in this browser.
+function saveVotedStatus(pollId, round = 1) {
+  const storageKey =
+    round <= 1
+      ? `pulsepoll-voted-${pollId}`
+      : `pulsepoll-voted-${pollId}-${round}`;
+
+  localStorage.setItem(storageKey, "true");
 }
 
 function PublicVotingPage() {
@@ -69,7 +83,8 @@ function PublicVotingPage() {
         }
 
         const savedPoll = data.poll;
-        const alreadyVoted = hasBrowserVoted(id);
+        const currentRound = savedPoll.round || 1;
+        const alreadyVoted = hasBrowserVoted(id, currentRound);
 
         setPoll({
           ...savedPoll,
@@ -81,7 +96,7 @@ function PublicVotingPage() {
             savedPoll.settings?.anonymousVoting ?? true,
         });
 
-        getVoterId(id);
+        getVoterId(id, currentRound);
         setHasVoted(alreadyVoted);
       } catch (err) {
         console.error("Public poll fetch error:", err);
@@ -208,6 +223,13 @@ function PublicVotingPage() {
   const isCompleted =
     poll?.status === "completed" || isAfterEnd;
 
+  const resultsVisibility = poll?.settings?.showResults || "after-voting";
+
+  const canViewResults =
+    resultsVisibility === "always" ||
+    (resultsVisibility === "after-voting" && hasVoted) ||
+    (resultsVisibility === "after-end" && isCompleted);
+
   const canVote =
     poll?.status === "active" &&
     !isBeforeStart &&
@@ -239,7 +261,9 @@ function PublicVotingPage() {
       return;
     }
 
-    if (hasBrowserVoted(id)) {
+    const currentRound = poll.round || 1;
+
+    if (hasBrowserVoted(id, currentRound)) {
       setHasVoted(true);
       return;
     }
@@ -253,7 +277,10 @@ function PublicVotingPage() {
     setMessage("");
 
     try {
-      const currentVoterId = getVoterId(id);
+      const currentVoterId = getVoterId(
+        id,
+        poll.round || 1
+      );
 
       const response = await fetch(`/api/polls/${id}/votes`, {
         method: "POST",
@@ -269,7 +296,7 @@ function PublicVotingPage() {
       const data = await response.json();
 
       if (response.status === 409) {
-        saveVotedStatus(id);
+        saveVotedStatus(id, poll.round || 1);
         setHasVoted(true);
         setMessage("");
         return;
@@ -279,7 +306,7 @@ function PublicVotingPage() {
         throw new Error(data.message || "Unable to submit your vote.");
       }
 
-      saveVotedStatus(id);
+      saveVotedStatus(id, poll.round || 1);
       setHasVoted(true);
       setMessage("");
 
@@ -475,7 +502,7 @@ function PublicVotingPage() {
           </form>
 
           {/* View Results button */}
-          {hasVoted && (
+          {canViewResults && (
             <button
               type="button"
               className="primary-button submit-vote-button"
@@ -496,7 +523,7 @@ function PublicVotingPage() {
           )}
 
           {/* Live results updated through WebSocket */}
-          {results && (
+          {results && canViewResults && (
             <div className="voting-results" style={{ marginTop: "28px" }}>
               <h2>Poll Results</h2>
 

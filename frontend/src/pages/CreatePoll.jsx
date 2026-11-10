@@ -1,4 +1,4 @@
-
+import { apiFetch } from "../utils/api";
 import { useState } from "react";
 import {
   ArrowLeft,
@@ -120,7 +120,7 @@ function CreatePoll({ onPublish }) {
     setSuccessMessage("");
 
     try {
-      const response = await fetch("/api/ai/generate-poll", {
+      const response = await apiFetch("/api/ai/generate-poll", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

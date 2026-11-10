@@ -1,6 +1,14 @@
 
 import { useState, useEffect, useCallback } from "react";
-import { Routes, Route, useNavigate } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+} from "react-router-dom";
+
+import AuthPage from "./pages/AuthPage";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
@@ -11,17 +19,17 @@ import MyPolls from "./pages/MyPolls";
 import ResultsPage from "./pages/ResultsPage";
 import PollSettings from "./pages/PollSettings";
 import PublicVotingPage from "./pages/PublicVotingPage";
+import SettingsPage from "./pages/Settings";
+
+import { useAuth } from "./context/AuthContext";
+import { apiFetch } from "./utils/api";
 
 import "./App.css";
 
-// Public poll route connected to MongoDB.
-function PublicPollRoute() {
-  return <PublicVotingPage />;
-}
-
-// Existing dashboard application.
 function DashboardApp() {
   const navigate = useNavigate();
+
+  const { user, logout } = useAuth();
 
   const [activePage, setActivePage] = useState("Dashboard");
   const [polls, setPolls] = useState([]);
@@ -44,7 +52,6 @@ function DashboardApp() {
     };
   }
 
-  // Fetch the latest poll data from MongoDB.
   const fetchPolls = useCallback(async (silent = false) => {
     if (!silent) {
       setLoadingPolls(true);
@@ -52,7 +59,7 @@ function DashboardApp() {
     }
 
     try {
-      const response = await fetch("/api/polls/");
+      const response = await apiFetch("/api/polls/");
 
       if (!response.ok) {
         throw new Error("Unable to fetch polls.");
@@ -78,7 +85,6 @@ function DashboardApp() {
     }
   }, []);
 
-  // Fetch immediately and refresh automatically every 10 seconds.
   useEffect(() => {
     fetchPolls();
 
@@ -86,14 +92,13 @@ function DashboardApp() {
       fetchPolls(true);
     }, 10000);
 
-    return () => {
-      clearInterval(refreshInterval);
-    };
+    return () => clearInterval(refreshInterval);
   }, [fetchPolls]);
 
   function handleNavigation(page) {
     setActivePage(page);
     setSelectedPoll(null);
+    setApiError("");
 
     if (
       page === "Dashboard" ||
@@ -112,28 +117,24 @@ function DashboardApp() {
       title: newPoll.title,
       description: newPoll.description,
       question: newPoll.title,
-
       options: newPoll.options.map((option) => ({
         text: option,
       })),
-
       settings: {
         allowMultipleAnswers: newPoll.allowMultiple,
         anonymousVoting: newPoll.anonymous,
         showResults: newPoll.showResults,
       },
-
       startTime: newPoll.startTime
         ? new Date(newPoll.startTime).toISOString()
         : null,
-
       endTime: newPoll.endTime
         ? new Date(newPoll.endTime).toISOString()
         : null,
     };
 
     try {
-      const response = await fetch("/api/polls/", {
+      const response = await apiFetch("/api/polls/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -148,7 +149,6 @@ function DashboardApp() {
       }
 
       await fetchPolls(true);
-
       setActivePage("Active Polls");
     } catch (error) {
       console.error("Publish poll error:", error);
@@ -157,19 +157,16 @@ function DashboardApp() {
     }
   }
 
-  // Open the backend-connected public voting page.
   function handleViewPoll(poll) {
     navigate(`/poll/${poll.id}`);
   }
 
-  // Open settings for the selected poll.
   function handleOpenPollSettings(poll) {
     setSelectedPoll(poll);
     setActivePage("Poll Settings");
     setApiError("");
   }
 
-  // Fetch results for the poll selected from My Polls.
   async function handleViewResults(poll) {
     if (!poll) return;
 
@@ -177,6 +174,7 @@ function DashboardApp() {
     setSelectedPoll(poll);
 
     try {
+      // Results are public, so normal fetch is sufficient.
       const response = await fetch(
         `/api/polls/${poll.id}/results`
       );
@@ -208,6 +206,11 @@ function DashboardApp() {
     }
   }
 
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
+
   const currentPoll = polls.find(
     (poll) => poll.id === selectedPoll?.id
   );
@@ -220,7 +223,10 @@ function DashboardApp() {
       />
 
       <main className="main-content">
-        <Header />
+        <Header
+          user={user}
+          onLogout={handleLogout}
+        />
 
         {apiError && (
           <div className="dashboard-content">
@@ -296,13 +302,18 @@ function DashboardApp() {
           />
         )}
 
+        {activePage === "Settings" && (
+          <SettingsPage />
+        )}
+
         {activePage !== "Dashboard" &&
           activePage !== "Create Poll" &&
           activePage !== "Active Polls" &&
           activePage !== "Past Polls" &&
           activePage !== "My Polls" &&
           activePage !== "Poll Settings" &&
-          activePage !== "Results" && (
+          activePage !== "Results" &&
+          activePage !== "Settings" && (
             <div className="dashboard-content">
               <h1>{activePage}</h1>
               <p className="welcome-description">
@@ -318,8 +329,38 @@ function DashboardApp() {
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<DashboardApp />} />
-      <Route path="/poll/:id" element={<PublicPollRoute />} />
+      {/* Authentication pages */}
+      <Route
+        path="/login"
+        element={<AuthPage mode="login" />}
+      />
+
+      <Route
+        path="/signup"
+        element={<AuthPage mode="signup" />}
+      />
+
+      {/* Protected creator dashboard */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <DashboardApp />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Public poll links */}
+      <Route
+        path="/poll/:id"
+        element={<PublicVotingPage />}
+      />
+
+      {/* Redirect unknown routes */}
+      <Route
+        path="*"
+        element={<Navigate to="/" replace />}
+      />
     </Routes>
   );
 }

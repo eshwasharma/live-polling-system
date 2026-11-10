@@ -1,4 +1,3 @@
-
 package models
 
 import (
@@ -8,19 +7,20 @@ import (
 )
 
 type Poll struct {
-	ID          bson.ObjectID `bson:"_id,omitempty" json:"id"`
-	Title       string        `bson:"title" json:"title"`
-	Description string        `bson:"description,omitempty" json:"description,omitempty"`
-	Question    string        `bson:"question" json:"question"`
-	Options     []PollOption  `bson:"options" json:"options"`
-	Settings    PollSettings  `bson:"settings" json:"settings"`
-
-	Status    string     `bson:"status" json:"status"`
-	StartTime *time.Time `bson:"startTime,omitempty" json:"startTime,omitempty"`
-	EndTime   *time.Time `bson:"endTime,omitempty" json:"endTime,omitempty"`
-
-	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
-	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
+	ID             bson.ObjectID `bson:"_id,omitempty" json:"id"`
+	OwnerID bson.ObjectID `bson:"ownerId" json:"ownerId,omitempty"`
+	Title          string        `bson:"title" json:"title"`
+	Description    string        `bson:"description,omitempty" json:"description,omitempty"`
+	Question       string        `bson:"question" json:"question"`
+	Options        []PollOption  `bson:"options" json:"options"`
+	Settings       PollSettings  `bson:"settings" json:"settings"`
+	LinkExpiration string        `bson:"linkExpiration,omitempty" json:"linkExpiration,omitempty"`
+	Status         string        `bson:"status" json:"status"`
+	Round          int           `bson:"round" json:"round"`
+	StartTime      *time.Time    `bson:"startTime,omitempty" json:"startTime,omitempty"`
+	EndTime        *time.Time    `bson:"endTime,omitempty" json:"endTime,omitempty"`
+	CreatedAt      time.Time     `bson:"createdAt" json:"createdAt"`
+	UpdatedAt      time.Time     `bson:"updatedAt" json:"updatedAt"`
 }
 
 type PollOption struct {
@@ -32,4 +32,5 @@ type PollSettings struct {
 	AllowMultipleAnswers bool   `bson:"allowMultipleAnswers" json:"allowMultipleAnswers"`
 	AnonymousVoting      bool   `bson:"anonymousVoting" json:"anonymousVoting"`
 	ShowResults          string `bson:"showResults" json:"showResults"`
+	LinkExpiration       string `bson:"linkExpiration,omitempty" json:"linkExpiration,omitempty"`
 }

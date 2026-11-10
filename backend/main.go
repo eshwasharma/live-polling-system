@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -21,71 +20,91 @@ import (
 )
 
 func main() {
-	// Load environment variables.
+	// Load environment variables from .env.
 	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+		log.Fatal("Error loading .env file:", err)
 	}
 
+	// Check required environment variables.
 	mongoURI := os.Getenv("MONGODB_URI")
+	jwtSecret := os.Getenv("JWT_SECRET")
+
 	if mongoURI == "" {
 		log.Fatal("MONGODB_URI is missing from .env")
 	}
 
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET is missing from .env")
+	}
+
 	// Connect to MongoDB.
-	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	clientOptions := options.Client().ApplyURI(mongoURI)
+
+	mongoClient, err := mongo.Connect(clientOptions)
 	if err != nil {
-		log.Fatal("MongoDB connection failed: ", err)
+		log.Fatal("MongoDB connection failed:", err)
 	}
 
 	// Verify MongoDB connection.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-
-	if err := client.Ping(ctx, readpref.Primary()); err != nil {
-		cancel()
-		log.Fatal("MongoDB ping failed: ", err)
+	if err := mongoClient.Ping(ctx, readpref.Primary()); err != nil {
+		log.Fatal("MongoDB ping failed:", err)
 	}
 
-	cancel()
-	log.Println("Successfully connected to MongoDB Atlas!")
+	log.Println("Connected to MongoDB successfully")
 
-	defer func() {
-		if err := client.Disconnect(context.Background()); err != nil {
-			log.Println("Error disconnecting MongoDB:", err)
-		}
-	}()
+	// Select database.
+	database := mongoClient.Database("pulsepoll")
 
-	// Select database and collections.
-	database := client.Database("pulsepoll")
-
+	// Get collections.
 	pollCollection := database.Collection("polls")
 	voteCollection := database.Collection("votes")
+	userCollection := database.Collection("users")
 
-	// Prevent the same browser from voting twice in the same poll.
-	voteIndex := mongo.IndexModel{
-		Keys: bson.D{
-			{Key: "pollId", Value: 1},
-			{Key: "voterId", Value: 1},
-		},
-		Options: options.Index().SetUnique(true),
-	}
-
+	// Create a unique index to prevent duplicate votes.
 	_, err = voteCollection.Indexes().CreateOne(
-		context.Background(),
-		voteIndex,
+		ctx,
+		mongo.IndexModel{
+			Keys: bson.D{
+				{Key: "pollId", Value: 1},
+				{Key: "voterId", Value: 1},
+			},
+			Options: options.Index().SetUnique(true),
+		},
 	)
 
 	if err != nil {
-		log.Fatal("Failed to create vote index: ", err)
+		log.Fatal("Failed to create unique vote index:", err)
 	}
 
-	log.Println("Vote duplicate-protection index created successfully!")
+	log.Println("Vote unique index created successfully")
 
-	// Connect MongoDB collections to controllers.
+	// Create a unique index for user emails.
+	_, err = userCollection.Indexes().CreateOne(
+		ctx,
+		mongo.IndexModel{
+			Keys: bson.D{
+				{Key: "email", Value: 1},
+			},
+			Options: options.Index().SetUnique(true),
+		},
+	)
+
+	if err != nil {
+		log.Fatal("Failed to create user email index:", err)
+	}
+
+	log.Println("User email unique index created successfully")
+
+	// Connect controllers to MongoDB collections.
 	controllers.SetPollCollection(pollCollection)
 	controllers.SetVoteCollection(voteCollection)
-
-	// Start automatic poll scheduling.
-	go startPollScheduler(pollCollection)
+	controllers.SetUserCollection(userCollection)
 
 	// Connect to Redis.
 	redisClient := redis.NewClient(&redis.Options{
@@ -100,51 +119,54 @@ func main() {
 		5*time.Second,
 	)
 
-	if err := redisClient.Ping(redisCtx).Err(); err != nil {
-		redisCancel()
-		log.Fatal("Redis connection failed: ", err)
+	err = redisClient.Ping(redisCtx).Err()
+	redisCancel()
+
+	if err != nil {
+		log.Fatal("Redis connection failed:", err)
 	}
 
-	redisCancel()
-	log.Println("Successfully connected to Redis!")
+	log.Println("Connected to Redis successfully")
 
+	// Connect controllers to Redis.
 	controllers.SetRedisClient(redisClient)
 
-	defer func() {
-		if err := redisClient.Close(); err != nil {
-			log.Println("Error closing Redis connection:", err)
-		}
-	}()
+	// Start the poll scheduler.
+	go startPollScheduler(pollCollection)
+
+	log.Println("Poll scheduler started")
 
 	// Create Gin router.
 	router := gin.Default()
 
-	// Health check endpoint.
+	// Health-check endpoint.
 	router.GET("/api/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
+		c.JSON(200, gin.H{
 			"success": true,
-			"message": "PulsePoll backend is running!",
+			"message": "PulsePoll backend is running",
 		})
 	})
+
+	// Register authentication routes.
+	routes.AuthRoutes(router)
 
 	// Register poll routes.
 	routes.PollRoutes(router)
 
-	log.Println("Starting PulsePoll backend on port 5000...")
+	// Start backend server.
+	log.Println("PulsePoll server starting on port 5000")
 
 	if err := router.Run(":5000"); err != nil {
-		log.Fatal("Server failed to start: ", err)
+		log.Fatal("Failed to start server:", err)
 	}
 }
 
-// startPollScheduler checks poll schedules every 5 seconds.
+// startPollScheduler checks scheduled and expired polls every 30 seconds.
 func startPollScheduler(collection *mongo.Collection) {
-	log.Println("Automatic poll scheduler started!")
-
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Run once immediately when the backend starts.
+	// Run once immediately when the scheduler starts.
 	updatePollStatuses(collection)
 
 	for range ticker.C {
@@ -160,43 +182,17 @@ func updatePollStatuses(collection *mongo.Collection) {
 	)
 	defer cancel()
 
-	now := time.Now().UTC()
+	now := time.Now()
 
-	// Activate polls whose scheduled start time has arrived.
-	activateResult, err := collection.UpdateMany(
+	// Complete expired active or scheduled polls.
+	completedResult, err := collection.UpdateMany(
 		ctx,
 		bson.M{
-			"status":    "scheduled",
-			"startTime": bson.M{"$lte": now},
-		},
-		bson.M{
-			"$set": bson.M{
-				"status":    "active",
-				"updatedAt": now,
+			"status": bson.M{
+				"$in": []string{"active", "scheduled"},
 			},
-		},
-	)
-
-	if err != nil {
-		log.Println("Failed to activate scheduled polls:", err)
-		return
-	}
-
-	if activateResult.ModifiedCount > 0 {
-		log.Printf(
-			"Activated %d scheduled poll(s)",
-			activateResult.ModifiedCount,
-		)
-	}
-
-	// Complete active polls whose end time has arrived.
-	completeResult, err := collection.UpdateMany(
-		ctx,
-		bson.M{
-			"status": "active",
 			"endTime": bson.M{
-				"$type": "date",
-				"$lte":  now,
+				"$lte": now,
 			},
 		},
 		bson.M{
@@ -208,14 +204,47 @@ func updatePollStatuses(collection *mongo.Collection) {
 	)
 
 	if err != nil {
-		log.Println("Failed to complete expired polls:", err)
+		log.Println("Scheduler: Failed to complete expired polls:", err)
 		return
 	}
 
-	if completeResult.ModifiedCount > 0 {
+	if completedResult.ModifiedCount > 0 {
 		log.Printf(
-			"Completed %d expired poll(s)",
-			completeResult.ModifiedCount,
+			"Scheduler: Completed %d expired poll(s)",
+			completedResult.ModifiedCount,
+		)
+	}
+
+	// Activate scheduled polls whose start time has arrived
+	// and whose end time is still in the future.
+	activeResult, err := collection.UpdateMany(
+		ctx,
+		bson.M{
+			"status": "scheduled",
+			"startTime": bson.M{
+				"$lte": now,
+			},
+			"endTime": bson.M{
+				"$gt": now,
+			},
+		},
+		bson.M{
+			"$set": bson.M{
+				"status":    "active",
+				"updatedAt": now,
+			},
+		},
+	)
+
+	if err != nil {
+		log.Println("Scheduler: Failed to activate scheduled polls:", err)
+		return
+	}
+
+	if activeResult.ModifiedCount > 0 {
+		log.Printf(
+			"Scheduler: Activated %d scheduled poll(s)",
+			activeResult.ModifiedCount,
 		)
 	}
 }
