@@ -1,6 +1,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { apiFetch, getApiUrl } from "../utils/api";
+import { apiFetch } from "../utils/api";
 import {
   ArrowLeft,
   BarChart3,
@@ -13,8 +13,8 @@ import {
   PieChart,
 } from "lucide-react";
 
-// Render backend URL is configured through Vercel's VITE_API_URL.
-// If empty, local development uses the Vite proxy.
+// Render backend URL configured through Vercel environment variables.
+// Local development continues using the Vite proxy.
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 
 function getWebSocketURL(path) {
@@ -25,7 +25,6 @@ function getWebSocketURL(path) {
     return url.toString();
   }
 
-  // Local development: use the Vite WebSocket proxy.
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${path}`;
 }
@@ -61,7 +60,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     [poll]
   );
 
-  // Fetch the latest results from the backend.
+  // Fetch latest results directly from the Render backend.
   const fetchResults = useCallback(async (showLoading = false) => {
     if (!pollId) return;
 
@@ -69,8 +68,8 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
     try {
       const response = await apiFetch(
-  `${API_BASE_URL}/api/polls/${pollId}/results`
-);
+        `${API_BASE_URL}/api/polls/${pollId}/results`
+      );
 
       const data = await response.json();
 
@@ -94,7 +93,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     }
   }, [pollId]);
 
-  // Fetch identified participants using the authenticated poll-owner endpoint.
+  // Fetch identified participants using the authenticated owner endpoint.
   const fetchParticipants = useCallback(async (showLoading = false) => {
     if (!pollId || poll?.settings?.anonymousVoting !== false) {
       setParticipants([]);
@@ -104,9 +103,10 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
     if (showLoading) setParticipantsLoading(true);
 
-   const response = await apiFetch(
-  `${API_BASE_URL}/api/polls/${pollId}/participants`
-);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/polls/${pollId}/participants`
+      );
 
       const data = await response.json();
 
@@ -152,7 +152,6 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       );
 
       socket.onmessage = () => {
-        // Fetch authoritative results and participant details after a vote.
         fetchResults();
         fetchParticipants();
       };
@@ -217,17 +216,15 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       const start = value.position;
       const end = start + item.percentage;
 
-      value.stops.push(
-        `${item.color} ${start}% ${end}%`
-      );
-
+      value.stops.push(`${item.color} ${start}% ${end}%`);
       value.position = end;
+
       return value;
     },
     { position: 0, stops: [] }
   ).stops.join(", ");
 
-  // Download results as a CSV file.
+  // Export results as CSV.
   const handleExportCSV = () => {
     const rows = [
       ["Poll Title", poll.title],
@@ -522,6 +519,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
             <div className="results-heading-actions">
               <span>{participants.length} participants</span>
+
               <button
                 type="button"
                 className="results-refresh-button"
