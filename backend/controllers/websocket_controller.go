@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,9 +20,33 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 
-	// Allow the frontend running on localhost during development.
+	// Allow only approved frontend origins.
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+
+		// Allow non-browser clients without an Origin header.
+		if origin == "" {
+			return true
+		}
+
+		// Allow local Vite development.
+		if origin == "http://localhost:5173" {
+			return true
+		}
+
+		// Allow configured production frontend URLs.
+		frontendURLs := strings.Split(
+			os.Getenv("FRONTEND_URL"),
+			",",
+		)
+
+		for _, frontendURL := range frontendURLs {
+			if strings.TrimSpace(frontendURL) == origin {
+				return true
+			}
+		}
+
+		return false
 	},
 }
 
@@ -40,7 +66,10 @@ type OptionResult struct {
 
 // GetLivePollResults retrieves the latest results directly from MongoDB.
 func GetLivePollResults(pollID bson.ObjectID) (WebSocketResults, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
 	defer cancel()
 
 	var poll struct {
@@ -50,12 +79,20 @@ func GetLivePollResults(pollID bson.ObjectID) (WebSocketResults, error) {
 		} `bson:"options"`
 	}
 
-	err := PollCollection.FindOne(ctx, bson.M{"_id": pollID}).Decode(&poll)
+	err := PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": pollID},
+	).Decode(&poll)
+
 	if err != nil {
 		return WebSocketResults{}, err
 	}
 
-	cursor, err := VoteCollection.Find(ctx, bson.M{"pollId": pollID})
+	cursor, err := VoteCollection.Find(
+		ctx,
+		bson.M{"pollId": pollID},
+	)
+
 	if err != nil {
 		return WebSocketResults{}, err
 	}
@@ -95,16 +132,20 @@ func GetLivePollResults(pollID bson.ObjectID) (WebSocketResults, error) {
 		count := voteCounts[option.ID]
 
 		percentage := 0.0
+
 		if totalVotes > 0 {
 			percentage = float64(count) / float64(totalVotes) * 100
 		}
 
-		results.Options = append(results.Options, OptionResult{
-			ID:         option.ID,
-			Text:       option.Text,
-			Votes:      count,
-			Percentage: percentage,
-		})
+		results.Options = append(
+			results.Options,
+			OptionResult{
+				ID:         option.ID,
+				Text:       option.Text,
+				Votes:      count,
+				Percentage: percentage,
+			},
+		)
 	}
 
 	return results, nil
@@ -115,6 +156,7 @@ func PollWebSocket(c *gin.Context) {
 	pollIDString := c.Param("id")
 
 	pollID, err := bson.ObjectIDFromHex(pollIDString)
+
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -124,9 +166,18 @@ func PollWebSocket(c *gin.Context) {
 	}
 
 	// Confirm that the poll exists.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+
 	var pollExists bson.M
-	err = PollCollection.FindOne(ctx, bson.M{"_id": pollID}).Decode(&pollExists)
+
+	err = PollCollection.FindOne(
+		ctx,
+		bson.M{"_id": pollID},
+	).Decode(&pollExists)
+
 	cancel()
 
 	if err != nil {
@@ -141,11 +192,17 @@ func PollWebSocket(c *gin.Context) {
 				"message": "Could not retrieve poll",
 			})
 		}
+
 		return
 	}
 
 	// Upgrade the HTTP connection to WebSocket.
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := upgrader.Upgrade(
+		c.Writer,
+		c.Request,
+		nil,
+	)
+
 	if err != nil {
 		log.Println("WebSocket upgrade failed:", err)
 		return
@@ -154,17 +211,25 @@ func PollWebSocket(c *gin.Context) {
 
 	// Subscribe to this poll's Redis vote channel.
 	channel := "poll:" + pollIDString + ":votes"
-	pubsub := RedisClient.Subscribe(context.Background(), channel)
+
+	pubsub := RedisClient.Subscribe(
+		context.Background(),
+		channel,
+	)
 	defer pubsub.Close()
 
 	// Confirm that the Redis subscription is ready.
-	if _, err := pubsub.ReceiveTimeout(context.Background(), 5*time.Second); err != nil {
+	if _, err := pubsub.ReceiveTimeout(
+		context.Background(),
+		5*time.Second,
+	); err != nil {
 		log.Println("Redis subscription failed:", err)
 		return
 	}
 
 	// Send the latest results immediately after connecting.
 	initialResults, err := GetLivePollResults(pollID)
+
 	if err != nil {
 		log.Println("Could not get initial poll results:", err)
 		return
@@ -198,16 +263,21 @@ func PollWebSocket(c *gin.Context) {
 			return
 
 		default:
-			message, err := pubsub.ReceiveMessage(context.Background())
+			message, err := pubsub.ReceiveMessage(
+				context.Background(),
+			)
+
 			if err != nil {
 				if err != redis.Nil {
 					log.Println("Redis message error:", err)
 				}
+
 				return
 			}
 
 			// Get the latest complete results from MongoDB.
 			latestResults, err := GetLivePollResults(pollID)
+
 			if err != nil {
 				log.Println("Could not retrieve updated results:", err)
 				continue
@@ -220,8 +290,15 @@ func PollWebSocket(c *gin.Context) {
 
 			// Keep the Redis event available for debugging.
 			var event map[string]interface{}
-			if err := json.Unmarshal([]byte(message.Payload), &event); err == nil {
-				log.Println("Live vote received for poll:", pollIDString)
+
+			if err := json.Unmarshal(
+				[]byte(message.Payload),
+				&event,
+			); err == nil {
+				log.Println(
+					"Live vote received for poll:",
+					pollIDString,
+				)
 			}
 		}
 	}

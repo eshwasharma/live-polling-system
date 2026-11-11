@@ -13,6 +13,23 @@ import {
   PieChart,
 } from "lucide-react";
 
+// Render backend URL is configured through Vercel's VITE_API_URL.
+// If empty, local development uses the Vite proxy.
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+function getWebSocketURL(path) {
+  if (API_BASE_URL) {
+    const url = new URL(API_BASE_URL);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
+    return url.toString();
+  }
+
+  // Local development: use the Vite WebSocket proxy.
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${path}`;
+}
+
 const CHART_COLORS = [
   "#7657e8",
   "#3695e8",
@@ -51,7 +68,10 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setIsRefreshing(true);
 
     try {
-      const response = await fetch(`/api/polls/${pollId}/results`);
+      const response = await fetch(
+        `${API_BASE_URL}/api/polls/${pollId}/results`
+      );
+
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -68,7 +88,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       setLiveError("");
     } catch (error) {
       console.error("Results refresh error:", error);
-      setLiveError(error.message);
+      setLiveError(error.message || "Unable to refresh results.");
     } finally {
       if (showLoading) setIsRefreshing(false);
     }
@@ -85,7 +105,10 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setParticipantsLoading(true);
 
     try {
-      const response = await apiFetch(`/api/polls/${pollId}/participants`);
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/polls/${pollId}/participants`
+      );
+
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -96,17 +119,20 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       setParticipantsError("");
     } catch (error) {
       console.error("Participants fetch error:", error);
-      setParticipantsError(error.message || "Unable to load participants.");
+      setParticipantsError(
+        error.message || "Unable to load participants."
+      );
     } finally {
       if (showLoading) setParticipantsLoading(false);
     }
   }, [pollId, poll?.settings?.anonymousVoting]);
 
-  // Load results and participant details when the page opens.
+  // Load results when the page opens.
   useEffect(() => {
     fetchResults();
   }, [fetchResults]);
 
+  // Load participant details when the page opens.
   useEffect(() => {
     fetchParticipants(true);
   }, [fetchParticipants]);
@@ -122,27 +148,24 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     const connectWebSocket = () => {
       if (isCancelled) return;
 
-      const protocol =
-        window.location.protocol === "https:" ? "wss:" : "ws:";
-
       socket = new WebSocket(
-        `${protocol}//${window.location.host}/api/polls/${pollId}/ws`
+        getWebSocketURL(`/api/polls/${pollId}/ws`)
       );
 
       socket.onmessage = () => {
-        // Fetch the authoritative latest result and participant list after a vote notification.
+        // Fetch authoritative results and participant details after a vote.
         fetchResults();
         fetchParticipants();
       };
 
       socket.onclose = () => {
         if (!isCancelled) {
-          reconnectTimer = setTimeout(connectWebSocket, 2000);
+          reconnectTimer = setTimeout(connectWebSocket, 3000);
         }
       };
 
       socket.onerror = () => {
-        socket.close();
+        if (socket) socket.close();
       };
     };
 
@@ -191,7 +214,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
   });
 
   const gradient = chartData.reduce(
-    (value, item, index) => {
+    (value, item) => {
       const start = value.position;
       const end = start + item.percentage;
 
@@ -488,7 +511,10 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       </section>
 
       {poll.settings?.anonymousVoting === false && (
-        <section className="results-panel participants-panel" style={{ marginTop: "24px" }}>
+        <section
+          className="results-panel participants-panel"
+          style={{ marginTop: "24px" }}
+        >
           <div className="results-panel-heading">
             <div>
               <h2>Voter details</h2>
@@ -541,7 +567,12 @@ function ResultsPage({ poll, onBack, canViewResults }) {
               >
                 <thead>
                   <tr>
-                    {["Participant", "Email", "Selected option(s)", "Voted at"].map((heading) => (
+                    {[
+                      "Participant",
+                      "Email",
+                      "Selected option(s)",
+                      "Voted at",
+                    ].map((heading) => (
                       <th
                         key={heading}
                         style={{
@@ -558,19 +589,47 @@ function ResultsPage({ poll, onBack, canViewResults }) {
                     ))}
                   </tr>
                 </thead>
+
                 <tbody>
                   {participants.map((participant, index) => (
-                    <tr key={`${participant.email}-${participant.votedAt}-${index}`}>
-                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5", fontWeight: 600 }}>
+                    <tr
+                      key={`${participant.email}-${participant.votedAt}-${index}`}
+                    >
+                      <td
+                        style={{
+                          padding: "14px",
+                          borderBottom: "1px solid #eeeaf5",
+                          fontWeight: 600,
+                        }}
+                      >
                         {participant.name || "—"}
                       </td>
-                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5" }}>
+
+                      <td
+                        style={{
+                          padding: "14px",
+                          borderBottom: "1px solid #eeeaf5",
+                        }}
+                      >
                         {participant.email || "—"}
                       </td>
-                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5" }}>
+
+                      <td
+                        style={{
+                          padding: "14px",
+                          borderBottom: "1px solid #eeeaf5",
+                        }}
+                      >
                         {(participant.selectedOptions || []).join(", ") || "—"}
                       </td>
-                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5", whiteSpace: "nowrap" }}>
+
+                      <td
+                        style={{
+                          padding: "14px",
+                          borderBottom: "1px solid #eeeaf5",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
                         {participant.votedAt
                           ? new Date(participant.votedAt).toLocaleString("en-IN")
                           : "—"}

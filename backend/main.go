@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"live-polling-backend/controllers"
@@ -19,7 +21,8 @@ import (
 )
 
 func main() {
-	// Load environment variables from .env.
+	// Load local environment variables when available.
+	// Render uses environment variables configured in its dashboard.
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found; using environment variables")
 	}
@@ -29,11 +32,11 @@ func main() {
 	jwtSecret := os.Getenv("JWT_SECRET")
 
 	if mongoURI == "" {
-		log.Fatal("MONGODB_URI is missing from .env")
+		log.Fatal("MONGODB_URI is missing")
 	}
 
 	if jwtSecret == "" {
-		log.Fatal("JWT_SECRET is missing from .env")
+		log.Fatal("JWT_SECRET is missing")
 	}
 
 	// Connect to MongoDB.
@@ -65,8 +68,7 @@ func main() {
 	voteCollection := database.Collection("votes")
 	userCollection := database.Collection("users")
 
-	// Create a unique index to prevent duplicate votes
-	// from the same browser/voter ID in a poll.
+	// Unique index for browser/voter ID.
 	_, err = voteCollection.Indexes().CreateOne(
 		ctx,
 		mongo.IndexModel{
@@ -77,16 +79,13 @@ func main() {
 			Options: options.Index().SetUnique(true),
 		},
 	)
-
 	if err != nil {
 		log.Fatal("Failed to create unique vote index:", err)
 	}
 
 	log.Println("Vote unique index created successfully")
 
-	// Create a unique index to prevent the same email
-	// from voting more than once in an identified poll.
-	// Anonymous votes do not contain voterEmail.
+	// Unique index for identified voter emails.
 	_, err = voteCollection.Indexes().CreateOne(
 		ctx,
 		mongo.IndexModel{
@@ -101,14 +100,13 @@ func main() {
 				}),
 		},
 	)
-
 	if err != nil {
 		log.Fatal("Failed to create unique voter email index:", err)
 	}
 
 	log.Println("Voter email unique index created successfully")
 
-	// Create a unique index for user emails.
+	// Unique index for user emails.
 	_, err = userCollection.Indexes().CreateOne(
 		ctx,
 		mongo.IndexModel{
@@ -118,7 +116,6 @@ func main() {
 			Options: options.Index().SetUnique(true),
 		},
 	)
-
 	if err != nil {
 		log.Fatal("Failed to create user email index:", err)
 	}
@@ -130,14 +127,12 @@ func main() {
 	controllers.SetVoteCollection(voteCollection)
 	controllers.SetUserCollection(userCollection)
 
-	// Connect to Redis.
-	// Connect to Redis locally or use Render Key Value in production.
+	// Connect to Redis locally or use Render Key Value.
 	redisOptions := &redis.Options{
 		Addr: "localhost:6379",
 		DB:   0,
 	}
 
-	// Render provides REDIS_URL for the hosted Redis-compatible service.
 	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
 		parsedOptions, err := redis.ParseURL(redisURL)
 		if err != nil {
@@ -175,9 +170,12 @@ func main() {
 	// Create Gin router.
 	router := gin.Default()
 
+	// Register CORS middleware before application routes.
+	router.Use(corsMiddleware())
+
 	// Health-check endpoint.
 	router.GET("/api/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
+		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "PulsePoll backend is running",
 		})
@@ -189,17 +187,63 @@ func main() {
 	// Register poll routes.
 	routes.PollRoutes(router)
 
-	// Start backend server.
-	log.Println("PulsePoll server starting on port 5000")
-
+	// Start backend server using Render's PORT.
 	port := os.Getenv("PORT")
-
 	if port == "" {
 		port = "5000"
 	}
 
+	log.Println("PulsePoll server starting on port", port)
+
 	if err := router.Run(":" + port); err != nil {
 		log.Fatal("Failed to start server:", err)
+	}
+}
+
+// corsMiddleware allows requests from the local frontend
+// and the deployed frontend configured through FRONTEND_URL.
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.Request.Header.Get("Origin")
+
+		allowed := origin == "http://localhost:5173"
+
+		frontendURLs := strings.Split(
+			os.Getenv("FRONTEND_URL"),
+			",",
+		)
+
+		for _, frontendURL := range frontendURLs {
+			if strings.TrimSpace(frontendURL) == origin && origin != "" {
+				allowed = true
+				break
+			}
+		}
+
+		if allowed {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+			c.Header(
+				"Access-Control-Allow-Headers",
+				"Origin, Content-Type, Accept, Authorization",
+			)
+			c.Header(
+				"Access-Control-Allow-Methods",
+				"GET, POST, PUT, PATCH, DELETE, OPTIONS",
+			)
+		}
+
+		if c.Request.Method == http.MethodOptions {
+			if !allowed {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
 	}
 }
 

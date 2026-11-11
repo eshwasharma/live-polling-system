@@ -1,6 +1,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { apiFetch } from "../utils/api";
 import {
   Users,
   Clock3,
@@ -10,6 +11,23 @@ import {
   Check,
   BarChart3,
 } from "lucide-react";
+
+// Backend URL configured through Vercel's VITE_API_URL.
+// If empty, local development uses the Vite proxy.
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+
+function getWebSocketURL(path) {
+  if (API_BASE_URL) {
+    const url = new URL(API_BASE_URL);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
+    return url.toString();
+  }
+
+  // Local development: use the Vite WebSocket proxy.
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${path}`;
+}
 
 // Generate or retrieve a voter ID for a specific poll round.
 // Round 1 keeps the original storage key for compatibility with existing votes.
@@ -77,7 +95,7 @@ function PublicVotingPage() {
       setError("");
 
       try {
-        const response = await fetch(`/api/polls/${id}`);
+        const response = await apiFetch(`/api/polls/${id}`);
         const data = await response.json();
 
         if (!response.ok || !data.success) {
@@ -122,6 +140,8 @@ function PublicVotingPage() {
 
   // Connect to the backend WebSocket for live poll updates.
   useEffect(() => {
+    if (!id) return;
+
     let socket;
     let reconnectTimer;
     let shouldReconnect = true;
@@ -129,10 +149,7 @@ function PublicVotingPage() {
     function connectWebSocket() {
       if (!shouldReconnect) return;
 
-      const protocol =
-        window.location.protocol === "https:" ? "wss:" : "ws:";
-
-      const wsUrl = `${protocol}//${window.location.host}/api/polls/${id}/ws`;
+      const wsUrl = getWebSocketURL(`/api/polls/${id}/ws`);
 
       console.log("Connecting to poll WebSocket:", wsUrl);
 
@@ -187,7 +204,7 @@ function PublicVotingPage() {
         if (shouldReconnect) {
           reconnectTimer = setTimeout(() => {
             connectWebSocket();
-          }, 2000);
+          }, 3000);
         }
       };
     }
@@ -199,6 +216,7 @@ function PublicVotingPage() {
       clearTimeout(reconnectTimer);
 
       if (socket) {
+        socket.onclose = null;
         socket.close();
       }
     };
@@ -287,6 +305,7 @@ function PublicVotingPage() {
       }
 
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
       if (!emailPattern.test(voterEmail.trim())) {
         setMessage("Please enter a valid email address.");
         return;
@@ -302,11 +321,8 @@ function PublicVotingPage() {
         poll.round || 1
       );
 
-      const response = await fetch(`/api/polls/${id}/votes`, {
+      const response = await apiFetch(`/api/polls/${id}/votes`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
         body: JSON.stringify({
           optionIds: selectedOptions,
           voterId: currentVoterId,
@@ -354,14 +370,20 @@ function PublicVotingPage() {
     setResultsError("");
 
     try {
-      const response = await fetch(`/api/polls/${id}/results`);
+      const response = await apiFetch(`/api/polls/${id}/results`);
       const data = await response.json();
 
       if (!response.ok || !data.success) {
         throw new Error(data.message || "Unable to load results.");
       }
 
-      setResults(data);
+      setResults({
+        ...data,
+        options: (data.options || []).map((option) => ({
+          ...option,
+          optionId: option.optionId || option.id,
+        })),
+      });
 
       setPoll((currentPoll) => ({
         ...currentPoll,
@@ -610,7 +632,7 @@ function PublicVotingPage() {
                 Total votes: <strong>{results.totalVotes}</strong>
               </p>
 
-              {results.options.map((option) => (
+              {(results.options || []).map((option) => (
                 <div
                   key={option.optionId || option.id}
                   className="result-option"
