@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { apiFetch } from "../utils/api";
 import {
   ArrowLeft,
   BarChart3,
@@ -29,6 +30,9 @@ function ResultsPage({ poll, onBack, canViewResults }) {
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [liveError, setLiveError] = useState("");
+  const [participants, setParticipants] = useState([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [participantsError, setParticipantsError] = useState("");
 
   const pollId = poll?.id;
 
@@ -70,10 +74,42 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     }
   }, [pollId]);
 
-  // Load results when the page opens.
+  // Fetch identified participants using the authenticated poll-owner endpoint.
+  const fetchParticipants = useCallback(async (showLoading = false) => {
+    if (!pollId || poll?.settings?.anonymousVoting !== false) {
+      setParticipants([]);
+      setParticipantsError("");
+      return;
+    }
+
+    if (showLoading) setParticipantsLoading(true);
+
+    try {
+      const response = await apiFetch(`/api/polls/${pollId}/participants`);
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to load participants.");
+      }
+
+      setParticipants(data.participants || []);
+      setParticipantsError("");
+    } catch (error) {
+      console.error("Participants fetch error:", error);
+      setParticipantsError(error.message || "Unable to load participants.");
+    } finally {
+      if (showLoading) setParticipantsLoading(false);
+    }
+  }, [pollId, poll?.settings?.anonymousVoting]);
+
+  // Load results and participant details when the page opens.
   useEffect(() => {
     fetchResults();
   }, [fetchResults]);
+
+  useEffect(() => {
+    fetchParticipants(true);
+  }, [fetchParticipants]);
 
   // Listen for live vote notifications through WebSocket.
   useEffect(() => {
@@ -94,8 +130,9 @@ function ResultsPage({ poll, onBack, canViewResults }) {
       );
 
       socket.onmessage = () => {
-        // Fetch the authoritative latest result after a vote notification.
+        // Fetch the authoritative latest result and participant list after a vote notification.
         fetchResults();
+        fetchParticipants();
       };
 
       socket.onclose = () => {
@@ -120,7 +157,7 @@ function ResultsPage({ poll, onBack, canViewResults }) {
         socket.close();
       }
     };
-  }, [pollId, fetchResults]);
+  }, [pollId, fetchResults, fetchParticipants]);
 
   if (!poll) return null;
 
@@ -449,6 +486,103 @@ function ResultsPage({ poll, onBack, canViewResults }) {
           </>
         )}
       </section>
+
+      {poll.settings?.anonymousVoting === false && (
+        <section className="results-panel participants-panel" style={{ marginTop: "24px" }}>
+          <div className="results-panel-heading">
+            <div>
+              <h2>Voter details</h2>
+              <p>Participants who submitted an identified vote.</p>
+            </div>
+
+            <div className="results-heading-actions">
+              <span>{participants.length} participants</span>
+              <button
+                type="button"
+                className="results-refresh-button"
+                onClick={() => fetchParticipants(true)}
+                disabled={participantsLoading}
+              >
+                <RefreshCw
+                  size={15}
+                  className={participantsLoading ? "refresh-spinning" : ""}
+                />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {participantsError && (
+            <p className="results-live-error" role="alert">
+              {participantsError}
+            </p>
+          )}
+
+          {participantsLoading && participants.length === 0 ? (
+            <div className="results-empty">
+              <Users size={28} />
+              <p>Loading voter details...</p>
+            </div>
+          ) : participants.length === 0 ? (
+            <div className="results-empty">
+              <Users size={28} />
+              <h3>No identified votes yet</h3>
+              <p>Participant details will appear here after someone votes.</p>
+            </div>
+          ) : (
+            <div style={{ width: "100%", overflowX: "auto" }}>
+              <table
+                style={{
+                  width: "100%",
+                  minWidth: "680px",
+                  borderCollapse: "collapse",
+                  textAlign: "left",
+                }}
+              >
+                <thead>
+                  <tr>
+                    {["Participant", "Email", "Selected option(s)", "Voted at"].map((heading) => (
+                      <th
+                        key={heading}
+                        style={{
+                          padding: "13px 14px",
+                          background: "#f7f6fc",
+                          color: "#625d75",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          borderBottom: "1px solid #e9e6f2",
+                        }}
+                      >
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {participants.map((participant, index) => (
+                    <tr key={`${participant.email}-${participant.votedAt}-${index}`}>
+                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5", fontWeight: 600 }}>
+                        {participant.name || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5" }}>
+                        {participant.email || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5" }}>
+                        {(participant.selectedOptions || []).join(", ") || "—"}
+                      </td>
+                      <td style={{ padding: "14px", borderBottom: "1px solid #eeeaf5", whiteSpace: "nowrap" }}>
+                        {participant.votedAt
+                          ? new Date(participant.votedAt).toLocaleString("en-IN")
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {liveError && (
         <p className="results-live-error" role="alert">

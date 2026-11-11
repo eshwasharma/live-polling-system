@@ -59,6 +59,8 @@ function PublicVotingPage() {
   const [hasVoted, setHasVoted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [voterName, setVoterName] = useState("");
+  const [voterEmail, setVoterEmail] = useState("");
 
   // Keep track of current time for scheduled poll availability.
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -273,6 +275,24 @@ function PublicVotingPage() {
       return;
     }
 
+    if (!poll.anonymous) {
+      if (!voterName.trim() || !voterEmail.trim()) {
+        setMessage("Please enter your name and email address.");
+        return;
+      }
+
+      if (voterName.trim().length > 100) {
+        setMessage("Name cannot exceed 100 characters.");
+        return;
+      }
+
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailPattern.test(voterEmail.trim())) {
+        setMessage("Please enter a valid email address.");
+        return;
+      }
+    }
+
     setSubmitting(true);
     setMessage("");
 
@@ -290,6 +310,12 @@ function PublicVotingPage() {
         body: JSON.stringify({
           optionIds: selectedOptions,
           voterId: currentVoterId,
+          ...(poll.anonymous
+            ? {}
+            : {
+                voterName: voterName.trim(),
+                voterEmail: voterEmail.trim().toLowerCase(),
+              }),
         }),
       });
 
@@ -432,6 +458,59 @@ function PublicVotingPage() {
           )}
 
           <form onSubmit={handleSubmitVote}>
+            {!poll.anonymous && !hasVoted && (
+              <div
+                className="voter-identity-fields"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: "14px",
+                  marginBottom: "20px",
+                }}
+              >
+                <label style={{ display: "grid", gap: "7px", fontWeight: 600 }}>
+                  Your name
+                  <input
+                    type="text"
+                    value={voterName}
+                    onChange={(event) => setVoterName(event.target.value)}
+                    placeholder="Enter your full name"
+                    maxLength={100}
+                    autoComplete="name"
+                    required
+                    disabled={!canVote || submitting}
+                    style={{
+                      width: "100%",
+                      padding: "12px 14px",
+                      border: "1px solid #d9d6e7",
+                      borderRadius: "10px",
+                      outlineColor: "#6854df",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "7px", fontWeight: 600 }}>
+                  Email address
+                  <input
+                    type="email"
+                    value={voterEmail}
+                    onChange={(event) => setVoterEmail(event.target.value)}
+                    placeholder="Enter your email address"
+                    autoComplete="email"
+                    required
+                    disabled={!canVote || submitting}
+                    style={{
+                      width: "100%",
+                      padding: "12px 14px",
+                      border: "1px solid #d9d6e7",
+                      borderRadius: "10px",
+                      outlineColor: "#6854df",
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
             <div className="voting-options">
               {poll.options.map((option, index) => {
                 const isSelected = selectedOptions.includes(option.id);
@@ -621,7 +700,9 @@ function PublicVotingPage() {
           </div>
 
           <p className="voting-privacy-note">
-            Your vote is handled according to this poll's voting settings.
+            {poll.anonymous
+              ? "Your vote is anonymous. Your name and email are not collected."
+              : "Your name and email are recorded with your vote and are visible to the poll creator."}
           </p>
         </aside>
       </div>

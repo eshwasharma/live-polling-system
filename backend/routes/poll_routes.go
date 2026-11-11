@@ -31,6 +31,7 @@ func PollRoutes(router *gin.Engine) {
 			owned.PUT("", controllers.UpdatePoll)
 			owned.POST("/duplicate", controllers.DuplicatePoll)
 			owned.DELETE("", controllers.DeletePoll)
+			owned.GET("/participants", controllers.GetPollParticipants)
 		}
 	}
 
@@ -41,6 +42,7 @@ func PollRoutes(router *gin.Engine) {
 		publicPolls.POST("/:id/votes", controllers.SubmitVote)
 		publicPolls.GET("/:id/results", controllers.GetPollResults)
 		publicPolls.GET("/:id/ws", controllers.PollWebSocket)
+		
 	}
 
 	// AI poll generation is a creator feature.

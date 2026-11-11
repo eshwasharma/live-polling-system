@@ -3,12 +3,12 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"live-polling-backend/models"
 	"log"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
-
-	"live-polling-backend/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -74,7 +74,6 @@ func CreatePoll(c *gin.Context) {
 
 		poll.Options[i].ID = bson.NewObjectID().Hex()
 	}
-
 	// Set poll details and validate the schedule.
 	now := time.Now()
 
@@ -344,9 +343,12 @@ func GetPollByID(c *gin.Context) {
 }
 
 // VoteRequest represents the data received when an audience member votes.
+// VoteRequest represents the data received when an audience member votes.
 type VoteRequest struct {
-	OptionIDs []string `json:"optionIds"`
-	VoterID   string   `json:"voterId"`
+	OptionIDs  []string `json:"optionIds"`
+	VoterID    string   `json:"voterId"`
+	VoterName  string   `json:"voterName"`
+	VoterEmail string   `json:"voterEmail"`
 }
 
 // VoteEvent represents a notification published through Redis.
@@ -417,6 +419,41 @@ func SubmitVote(c *gin.Context) {
 			"message": "Failed to retrieve poll",
 		})
 		return
+	}
+
+	// Validate participant identity when anonymous voting is disabled.
+	request.VoterName = strings.TrimSpace(request.VoterName)
+	request.VoterEmail = strings.ToLower(strings.TrimSpace(request.VoterEmail))
+
+	if !poll.Settings.AnonymousVoting {
+		if request.VoterName == "" || request.VoterEmail == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Name and email are required for identified voting",
+			})
+			return
+		}
+
+		if len(request.VoterName) > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Name cannot exceed 100 characters",
+			})
+			return
+		}
+
+		parsedEmail, emailErr := mail.ParseAddress(request.VoterEmail)
+		if emailErr != nil || parsedEmail.Address != request.VoterEmail {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Please enter a valid email address",
+			})
+			return
+		}
+	} else {
+		// Do not collect or store identity details for anonymous votes.
+		request.VoterName = ""
+		request.VoterEmail = ""
 	}
 
 	// Check whether the poll link has expired.
@@ -520,19 +557,54 @@ func SubmitVote(c *gin.Context) {
 		return
 	}
 
+	// In identified mode, an email address can vote only once per poll,
+	// even when the participant uses another browser or device.
+	if !poll.Settings.AnonymousVoting {
+		emailVoteCount, countErr := VoteCollection.CountDocuments(
+			ctx,
+			bson.M{
+				"pollId":     objectID,
+				"voterEmail": request.VoterEmail,
+			},
+		)
+		if countErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "Failed to check participant email",
+			})
+			return
+		}
+		if emailVoteCount > 0 {
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": "This email address has already voted in this poll",
+			})
+			return
+		}
+	}
+
 	// Create the vote document.
 	vote := models.Vote{
-		ID:        bson.NewObjectID(),
-		PollID:    objectID,
-		OptionIDs: request.OptionIDs,
-		VoterID:   request.VoterID,
-		CreatedAt: time.Now(),
+		ID:         bson.NewObjectID(),
+		PollID:     objectID,
+		OptionIDs:  request.OptionIDs,
+		VoterID:    request.VoterID,
+		VoterName:  request.VoterName,
+		VoterEmail: request.VoterEmail,
+		CreatedAt:  time.Now(),
 	}
 
 	// Save vote permanently in MongoDB first.
 	_, err = VoteCollection.InsertOne(ctx, vote)
 
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": "You have already voted in this poll",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to save vote",
@@ -711,6 +783,86 @@ func GetPollResults(c *gin.Context) {
 		"description": poll.Description,
 		"totalVotes":  totalVotes,
 		"options":     optionResults,
+	})
+}
+
+// GetPollParticipants returns identified voters to the poll owner only.
+// The route must be registered inside the authenticated poll-owner route group.
+func GetPollParticipants(c *gin.Context) {
+	pollID := c.Param("id")
+	objectID, err := bson.ObjectIDFromHex(pollID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid poll ID",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	var poll models.Poll
+	err = PollCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&poll)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Poll not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to retrieve poll"})
+		return
+	}
+
+	if poll.Settings.AnonymousVoting {
+		c.JSON(http.StatusOK, gin.H{
+			"success":      true,
+			"anonymous":    true,
+			"participants": []gin.H{},
+		})
+		return
+	}
+
+	cursor, err := VoteCollection.Find(ctx, bson.M{
+		"pollId":     objectID,
+		"voterEmail": bson.M{"$type": "string", "$ne": ""},
+	}, options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to retrieve participants"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var votes []models.Vote
+	if err := cursor.All(ctx, &votes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to read participants"})
+		return
+	}
+
+	optionTexts := make(map[string]string, len(poll.Options))
+	for _, option := range poll.Options {
+		optionTexts[option.ID] = option.Text
+	}
+
+	participants := make([]gin.H, 0, len(votes))
+	for _, vote := range votes {
+		selectedOptions := make([]string, 0, len(vote.OptionIDs))
+		for _, optionID := range vote.OptionIDs {
+			if optionText, ok := optionTexts[optionID]; ok {
+				selectedOptions = append(selectedOptions, optionText)
+			}
+		}
+		participants = append(participants, gin.H{
+			"name":            vote.VoterName,
+			"email":           vote.VoterEmail,
+			"selectedOptions": selectedOptions,
+			"votedAt":         vote.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"anonymous":    false,
+		"participants": participants,
 	})
 }
 

@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -66,7 +65,8 @@ func main() {
 	voteCollection := database.Collection("votes")
 	userCollection := database.Collection("users")
 
-	// Create a unique index to prevent duplicate votes.
+	// Create a unique index to prevent duplicate votes
+	// from the same browser/voter ID in a poll.
 	_, err = voteCollection.Indexes().CreateOne(
 		ctx,
 		mongo.IndexModel{
@@ -83,6 +83,30 @@ func main() {
 	}
 
 	log.Println("Vote unique index created successfully")
+
+	// Create a unique index to prevent the same email
+	// from voting more than once in an identified poll.
+	// Anonymous votes do not contain voterEmail.
+	_, err = voteCollection.Indexes().CreateOne(
+		ctx,
+		mongo.IndexModel{
+			Keys: bson.D{
+				{Key: "pollId", Value: 1},
+				{Key: "voterEmail", Value: 1},
+			},
+			Options: options.Index().
+				SetUnique(true).
+				SetPartialFilterExpression(bson.M{
+					"voterEmail": bson.M{"$type": "string"},
+				}),
+		},
+	)
+
+	if err != nil {
+		log.Fatal("Failed to create unique voter email index:", err)
+	}
+
+	log.Println("Voter email unique index created successfully")
 
 	// Create a unique index for user emails.
 	_, err = userCollection.Indexes().CreateOne(
@@ -107,11 +131,23 @@ func main() {
 	controllers.SetUserCollection(userCollection)
 
 	// Connect to Redis.
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-	})
+	// Connect to Redis locally or use Render Key Value in production.
+	redisOptions := &redis.Options{
+		Addr: "localhost:6379",
+		DB:   0,
+	}
+
+	// Render provides REDIS_URL for the hosted Redis-compatible service.
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		parsedOptions, err := redis.ParseURL(redisURL)
+		if err != nil {
+			log.Fatal("Invalid REDIS_URL:", err)
+		}
+
+		redisOptions = parsedOptions
+	}
+
+	redisClient := redis.NewClient(redisOptions)
 
 	// Verify Redis connection.
 	redisCtx, redisCancel := context.WithTimeout(
@@ -156,7 +192,13 @@ func main() {
 	// Start backend server.
 	log.Println("PulsePoll server starting on port 5000")
 
-	if err := router.Run(":5000"); err != nil {
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		port = "5000"
+	}
+
+	if err := router.Run(":" + port); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
 }
