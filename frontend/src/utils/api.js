@@ -1,7 +1,9 @@
 
 const TOKEN_KEY = "pulsepoll_token";
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || ""
+).replace(/\/+$/, "");
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -15,13 +17,17 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+export function getApiUrl(url) {
+  // Don't modify URLs that are already absolute.
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+
+  return `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
 export async function apiFetch(url, options = {}) {
   const token = getToken();
-
-  // Use Render backend in production, or relative URLs locally.
-  const requestUrl = /^https?:\/\//i.test(url)
-    ? url
-    : `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
 
   const headers = new Headers(options.headers || {});
 
@@ -37,7 +43,7 @@ export async function apiFetch(url, options = {}) {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(requestUrl, {
+  const response = await fetch(getApiUrl(url), {
     ...options,
     headers,
   });
