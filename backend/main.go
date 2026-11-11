@@ -195,9 +195,13 @@ func main() {
 
 	log.Println("PulsePoll server starting on port", port)
 
-	if err := router.Run(":" + port); err != nil {
-		log.Fatal("Failed to start server:", err)
-	}
+	serverAddress := "0.0.0.0:" + port
+
+log.Println("Starting PulsePoll server on", serverAddress)
+
+if err := router.Run(serverAddress); err != nil {
+    log.Fatal("Failed to start server:", err)
+}
 }
 
 // corsMiddleware allows requests from the local frontend
