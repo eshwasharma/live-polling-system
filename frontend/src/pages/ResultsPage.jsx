@@ -15,8 +15,10 @@ import {
 
 // Render backend URL configured through Vercel environment variables.
 // Local development continues using the Vite proxy.
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || ""
+).replace(/\/+$/, "");
 function getWebSocketURL(path) {
   if (API_BASE_URL) {
     const url = new URL(API_BASE_URL);
@@ -67,10 +69,12 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setIsRefreshing(true);
 
     try {
-      const response = await apiFetch(
-  `/api/polls/${pollId}/results`
+      const response = await fetch(
+  `${API_BASE_URL}/api/polls/${pollId}/results`,
+  {
+    cache: "no-store",
+  }
 );
-
       const data = await response.json();
 
       if (!response.ok || !data.success) {
@@ -104,8 +108,8 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setParticipantsLoading(true);
 
     try {
-     const response = await apiFetch(
-  `/api/polls/${pollId}/participants`
+    const response = await apiFetch(
+  `${API_BASE_URL}/api/polls/${pollId}/participants`
 );
       const data = await response.json();
 
