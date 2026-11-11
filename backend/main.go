@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"live-polling-backend/controllers"
@@ -193,56 +192,30 @@ func main() {
 		port = "5000"
 	}
 
-	log.Println("PulsePoll server starting on port", port)
-
 	serverAddress := "0.0.0.0:" + port
 
-log.Println("Starting PulsePoll server on", serverAddress)
+	log.Println("Starting PulsePoll server on", serverAddress)
 
-if err := router.Run(serverAddress); err != nil {
-    log.Fatal("Failed to start server:", err)
-}
+	if err := router.Run(serverAddress); err != nil {
+		log.Fatal("Failed to start server:", err)
+	}
 }
 
-// corsMiddleware allows requests from the local frontend
-// and the deployed frontend configured through FRONTEND_URL.
+// corsMiddleware allows requests from deployed and local frontends.
+// Temporary permissive CORS configuration for deployment troubleshooting.
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		origin := c.Request.Header.Get("Origin")
-
-		allowed := origin == "http://localhost:5173"
-
-		frontendURLs := strings.Split(
-			os.Getenv("FRONTEND_URL"),
-			",",
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header(
+			"Access-Control-Allow-Headers",
+			"Origin, Content-Type, Accept, Authorization",
+		)
+		c.Header(
+			"Access-Control-Allow-Methods",
+			"GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		)
 
-		for _, frontendURL := range frontendURLs {
-			if strings.TrimSpace(frontendURL) == origin && origin != "" {
-				allowed = true
-				break
-			}
-		}
-
-		if allowed {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Vary", "Origin")
-			c.Header(
-				"Access-Control-Allow-Headers",
-				"Origin, Content-Type, Accept, Authorization",
-			)
-			c.Header(
-				"Access-Control-Allow-Methods",
-				"GET, POST, PUT, PATCH, DELETE, OPTIONS",
-			)
-		}
-
 		if c.Request.Method == http.MethodOptions {
-			if !allowed {
-				c.AbortWithStatus(http.StatusForbidden)
-				return
-			}
-
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
