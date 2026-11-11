@@ -68,9 +68,8 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setIsRefreshing(true);
 
     try {
-     const response = await apiFetch(
-  getApiUrl(`/api/polls/${pollId}/results`),
-  { cache: "no-store" }
+      const response = await apiFetch(
+  `${API_BASE_URL}/api/polls/${pollId}/results`
 );
 
       const data = await response.json();
@@ -105,10 +104,8 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
     if (showLoading) setParticipantsLoading(true);
 
-    try {
-     const response = await apiFetch(
-  getApiUrl(`/api/polls/${pollId}/participants`),
-  { cache: "no-store" }
+   const response = await apiFetch(
+  `${API_BASE_URL}/api/polls/${pollId}/participants`
 );
 
       const data = await response.json();
