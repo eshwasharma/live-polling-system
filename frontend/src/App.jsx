@@ -187,43 +187,46 @@ function DashboardApp() {
     setApiError("");
   }
 
-  async function handleViewResults(poll) {
-    if (!poll) return;
+ 
+async function handleViewResults(poll) {
+  if (!poll) return;
 
-    setApiError("");
-    setSelectedPoll(poll);
+  setApiError("");
+  setSelectedPoll(poll);
 
-    try {
-      const response = await fetch(
-        `/api/polls/${poll.id}/results`
-      );
+  try {
+    // Use apiFetch so the request goes to the Render backend.
+    const response = await apiFetch(
+      `/api/polls/${poll.id}/results`
+    );
 
-      const data = await response.json();
+    const data = await response.json();
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "Unable to load poll results.");
-      }
-
-      setPolls((currentPolls) =>
-        currentPolls.map((currentPoll) =>
-          currentPoll.id === poll.id
-            ? {
-                ...currentPoll,
-                votes: data.totalVotes,
-                optionVotes: data.options.map(
-                  (option) => option.votes
-                ),
-              }
-            : currentPoll
-        )
-      );
-
-      setActivePage("Results");
-    } catch (error) {
-      console.error("Fetch results error:", error);
-      setApiError(error.message);
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || "Unable to load poll results.");
     }
+
+    setPolls((currentPolls) =>
+      currentPolls.map((currentPoll) =>
+        currentPoll.id === poll.id
+          ? {
+              ...currentPoll,
+              votes: data.totalVotes,
+              optionVotes: data.options.map(
+                (option) => option.votes
+              ),
+            }
+          : currentPoll
+      )
+    );
+
+    setActivePage("Results");
+  } catch (error) {
+    console.error("Fetch results error:", error);
+    setApiError(error.message || "Unable to load poll results.");
   }
+}
+
 
   function handleLogout() {
     logout();
