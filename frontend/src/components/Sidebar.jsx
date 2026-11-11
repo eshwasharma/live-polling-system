@@ -1,3 +1,4 @@
+
 import {
   LayoutDashboard,
   PlusCircle,
@@ -16,7 +17,7 @@ const navigationItems = [
   { label: "My Polls", icon: ListChecks },
 ];
 
-function Sidebar({ activePage, onNavigate }) {
+function Sidebar({ activePage, onNavigate, onLogout }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -36,6 +37,7 @@ function Sidebar({ activePage, onNavigate }) {
             return (
               <button
                 key={item.label}
+                type="button"
                 className={`nav-item ${
                   activePage === item.label ? "active" : ""
                 }`}
@@ -51,6 +53,7 @@ function Sidebar({ activePage, onNavigate }) {
 
       <div className="sidebar-bottom">
         <button
+          type="button"
           className={`nav-item ${
             activePage === "Settings" ? "active" : ""
           }`}
@@ -60,7 +63,11 @@ function Sidebar({ activePage, onNavigate }) {
           <span>Settings</span>
         </button>
 
-        <button className="nav-item logout-item">
+        <button
+          type="button"
+          className="nav-item logout-item"
+          onClick={onLogout}
+        >
           <LogOut size={19} strokeWidth={1.8} />
           <span>Log out</span>
         </button>

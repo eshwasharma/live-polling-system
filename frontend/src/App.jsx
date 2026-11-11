@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Routes,
   Route,
@@ -37,6 +37,7 @@ function DashboardApp() {
   const [votedPollIds, setVotedPollIds] = useState([]);
   const [loadingPolls, setLoadingPolls] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   function formatPoll(poll) {
     return {
@@ -94,6 +95,25 @@ function DashboardApp() {
 
     return () => clearInterval(refreshInterval);
   }, [fetchPolls]);
+
+  // Filter polls by title, description or question.
+  const filteredPolls = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) return polls;
+
+    return polls.filter((poll) => {
+      const title = (poll.title || "").toLowerCase();
+      const description = (poll.description || "").toLowerCase();
+      const question = (poll.question || "").toLowerCase();
+
+      return (
+        title.includes(query) ||
+        description.includes(query) ||
+        question.includes(query)
+      );
+    });
+  }, [polls, searchQuery]);
 
   function handleNavigation(page) {
     setActivePage(page);
@@ -174,7 +194,6 @@ function DashboardApp() {
     setSelectedPoll(poll);
 
     try {
-      // Results are public, so normal fetch is sufficient.
       const response = await fetch(
         `/api/polls/${poll.id}/results`
       );
@@ -220,12 +239,15 @@ function DashboardApp() {
       <Sidebar
         activePage={activePage}
         onNavigate={handleNavigation}
+        onLogout={handleLogout}
       />
 
       <main className="main-content">
         <Header
           user={user}
           onLogout={handleLogout}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
         />
 
         {apiError && (
@@ -238,7 +260,7 @@ function DashboardApp() {
 
         {activePage === "Dashboard" && (
           <Dashboard
-            polls={polls}
+            polls={filteredPolls}
             onNavigate={handleNavigation}
           />
         )}
@@ -249,7 +271,7 @@ function DashboardApp() {
 
         {activePage === "Active Polls" && (
           <ActivePolls
-            polls={polls.filter(
+            polls={filteredPolls.filter(
               (poll) =>
                 poll.status === "active" ||
                 poll.status === "scheduled"
@@ -263,7 +285,7 @@ function DashboardApp() {
 
         {activePage === "Past Polls" && (
           <ActivePolls
-            polls={polls.filter(
+            polls={filteredPolls.filter(
               (poll) => poll.status === "completed"
             )}
             onViewPoll={handleViewPoll}
@@ -275,7 +297,7 @@ function DashboardApp() {
 
         {activePage === "My Polls" && (
           <MyPolls
-            polls={polls}
+            polls={filteredPolls}
             onViewPoll={handleViewPoll}
             onViewResults={handleViewResults}
             onOpenSettings={handleOpenPollSettings}
@@ -329,7 +351,6 @@ function DashboardApp() {
 function App() {
   return (
     <Routes>
-      {/* Authentication pages */}
       <Route
         path="/login"
         element={<AuthPage mode="login" />}
@@ -340,7 +361,6 @@ function App() {
         element={<AuthPage mode="signup" />}
       />
 
-      {/* Protected creator dashboard */}
       <Route
         path="/"
         element={
@@ -350,13 +370,11 @@ function App() {
         }
       />
 
-      {/* Public poll links */}
       <Route
         path="/poll/:id"
         element={<PublicVotingPage />}
       />
 
-      {/* Redirect unknown routes */}
       <Route
         path="*"
         element={<Navigate to="/" replace />}

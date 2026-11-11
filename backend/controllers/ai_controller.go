@@ -25,6 +25,37 @@ type GeneratedPoll struct {
 	Options     []string `json:"options"`
 }
 
+// Checks whether a Gemini error is temporary and worth retrying.
+func isRetryableGeminiError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToUpper(err.Error())
+
+	retryableErrors := []string{
+		"503",
+		"UNAVAILABLE",
+		"429",
+		"RESOURCE_EXHAUSTED",
+		"500",
+		"502",
+		"504",
+		"DEADLINE_EXCEEDED",
+		"INTERNAL",
+		"408",
+		"TIMEOUT",
+	}
+
+	for _, retryable := range retryableErrors {
+		if strings.Contains(message, retryable) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func GenerateAIPoll(c *gin.Context) {
 	var request GeneratePollRequest
 
@@ -58,11 +89,14 @@ func GenerateAIPoll(c *gin.Context) {
 		return
 	}
 
-	// Give the Gemini request a maximum of 60 seconds.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	// Allow up to 120 seconds for the complete operation,
+	// including retries.
+	ctx, cancel := context.WithTimeout(
+		c.Request.Context(),
+		30*time.Second,
+	)
 	defer cancel()
 
-	// Explicitly configure the Gemini Developer API backend.
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
@@ -96,23 +130,93 @@ Rules:
 - Do not include explanations outside the JSON.
 - Make the question relevant to the user's prompt.`
 
-	result, err := client.Models.GenerateContent(
-		ctx,
-		"gemini-3.8-flash",
-		[]*genai.Content{
-			{
-				Parts: []*genai.Part{
-					{
-						Text: instructions + "\n\nUser prompt: " + prompt,
-					},
+	contents := []*genai.Content{
+		{
+			Parts: []*genai.Part{
+				{
+					Text: instructions + "\n\nUser prompt: " + prompt,
 				},
 			},
 		},
-		nil,
-	)
+	}
+
+	// Gemini generation with a maximum of 3 attempts.
+	var result *genai.GenerateContentResponse
+
+	const maxAttempts = 2
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		log.Printf(
+			"AI: Gemini generation attempt %d of %d",
+			attempt,
+			maxAttempts,
+		)
+
+		result, err = client.Models.GenerateContent(
+			ctx,
+			"gemini-3.5-flash-lite",
+			contents,
+			nil,
+		)
+
+		if err == nil {
+			break
+		}
+
+		log.Printf(
+			"AI Error: Gemini attempt %d failed: %v",
+			attempt,
+			err,
+		)
+
+		// Do not retry permanent errors.
+		if !isRetryableGeminiError(err) {
+			break
+		}
+
+		// No more attempts remaining.
+		if attempt == maxAttempts {
+			break
+		}
+
+		// Exponential backoff: 1 second, then 2 seconds.
+		delay := time.Duration(1<<(attempt-1)) * time.Second
+
+		log.Printf(
+			"AI: Retrying Gemini request in %v...",
+			delay,
+		)
+
+		timer := time.NewTimer(delay)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+			attempt = maxAttempts
+
+		case <-timer.C:
+		}
+
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			break
+		}
+	}
 
 	if err != nil {
-		log.Printf("AI Error: Gemini generation failed: %v", err)
+		log.Printf(
+			"AI Error: Gemini generation failed after retries: %v",
+			err,
+		)
+
+		if isRetryableGeminiError(err) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"success": false,
+				"message": "Gemini is temporarily busy. Please try again in a little while.",
+			})
+			return
+		}
 
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
@@ -142,7 +246,10 @@ Rules:
 	var generatedPoll GeneratedPoll
 
 	if err := json.Unmarshal([]byte(responseText), &generatedPoll); err != nil {
-		log.Printf("AI Error: Invalid JSON returned by Gemini: %v", err)
+		log.Printf(
+			"AI Error: Invalid JSON returned by Gemini: %v",
+			err,
+		)
 
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,

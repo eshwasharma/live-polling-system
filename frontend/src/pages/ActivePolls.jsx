@@ -38,9 +38,7 @@ function ActivePolls({
     try {
       const response = await apiFetch(
         `/api/polls/${poll.id}/end`,
-        {
-          method: "POST",
-        }
+        { method: "POST" }
       );
 
       const data = await response.json();
@@ -63,8 +61,26 @@ function ActivePolls({
     }
   };
 
+  const formatDate = (date) => {
+    if (!date) return null;
+
+    const parsedDate = new Date(date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      return "Not available";
+    }
+
+    return parsedDate.toLocaleString("en-IN", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
   return (
-    <div className="dashboard-content">
+    <div className="dashboard-content active-polls-page">
       <section className="welcome-section">
         <div>
           <p className="eyebrow">POLL MANAGEMENT</p>
@@ -107,14 +123,18 @@ function ActivePolls({
       ) : (
         <div className="active-polls-grid">
           {polls.map((poll) => {
-            const createdDate = new Date(poll.createdAt);
+            const createdDate = formatDate(poll.createdAt);
+            const startDate = formatDate(poll.startTime);
+            const endDate = formatDate(poll.endTime);
             const isEnded = poll.status === "completed";
+            const options = poll.options || [];
 
             return (
               <article className="active-poll-card" key={poll.id}>
-                <div className="active-poll-card-top">
-                  <div className="active-poll-icon">
-                    <BarChart3 size={21} />
+                {/* Card header */}
+                <div className="ap-card-header">
+                  <div className="ap-card-icon">
+                    <BarChart3 size={22} />
                   </div>
 
                   <span
@@ -124,104 +144,110 @@ function ActivePolls({
                         : `status-${poll.status}`
                     }`}
                   >
-                    {isEnded ? "completed" : poll.status}
+                    <span className="ap-status-dot" />
+                    {isEnded ? "Completed" : poll.status}
                   </span>
                 </div>
 
-                <h2>{poll.title}</h2>
+                {/* Poll details */}
+                <div className="ap-card-content">
+                  <h2>{poll.title}</h2>
 
-                <p className="active-poll-description">
-                  {poll.description || "No description provided."}
-                </p>
-
-                <div className="active-poll-options">
-                  <span>ANSWER OPTIONS</span>
-
-                  {poll.options.map((option, index) => (
-                    <div className="active-poll-option" key={index}>
-                      <span className="option-number">
-                        {index + 1}
-                      </span>
-                      <span>
-                        {typeof option === "string"
-                          ? option
-                          : option.text}
-                      </span>
-                    </div>
-                  ))}
+                  <p className="active-poll-description">
+                    {poll.description || "No description provided."}
+                  </p>
                 </div>
 
-                <div className="active-poll-card-footer">
-                  <div>
-                    <Users size={15} />
+                {/* Answer options */}
+                <div className="ap-options-container">
+                  <div className="ap-options-heading">
+                    <span>ANSWER OPTIONS</span>
+                    <span>{options.length} choices</span>
+                  </div>
+
+                  <div className="ap-options-list">
+                    {options.map((option, index) => (
+                      <div className="ap-option-row" key={option.id || index}>
+                        <span className="ap-option-number">
+                          {index + 1}
+                        </span>
+
+                        <span className="ap-option-text">
+                          {typeof option === "string"
+                            ? option
+                            : option.text}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Poll statistics */}
+                <div className="ap-card-stats">
+                  <div className="ap-stat">
+                    <Users size={16} />
                     <span>{poll.votes || 0} votes</span>
                   </div>
 
-                  <div>
-                    <CalendarDays size={15} />
-                    <span>
-                      {createdDate.toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })}
-                    </span>
+                  <div className="ap-stat">
+                    <CalendarDays size={16} />
+                    <span>{createdDate || "Date unavailable"}</span>
                   </div>
                 </div>
 
-                <div className="active-poll-card-bottom">
-                  <div className="poll-schedule-details">
-                    <span>
-                      <CalendarDays size={14} />
-                      {poll.startTime
-                        ? `Starts: ${new Date(
-                            poll.startTime
-                          ).toLocaleString("en-IN")}`
-                        : "Starts: Immediately"}
-                    </span>
-
-                    <span>
-                      <Clock3 size={14} />
-                      {poll.endTime
-                        ? `Ends: ${new Date(
-                            poll.endTime
-                          ).toLocaleString("en-IN")}`
-                        : "No end date set"}
-                    </span>
+                {/* Schedule details */}
+                <div className="ap-schedule">
+                  <div className="ap-schedule-item">
+                    <CalendarDays size={15} />
+                    <span className="ap-schedule-label">Starts</span>
+                    <strong>
+                      {startDate || "Immediately"}
+                    </strong>
                   </div>
 
-                  <div className="active-poll-actions">
-                    {!isEnded && poll.status === "active" && (
-                      <button
-                        className="text-button"
-                        type="button"
-                        onClick={() => handleEndPoll(poll)}
-                        disabled={endingPollId === poll.id}
-                      >
-                        <SquareStop size={15} />
-                        {endingPollId === poll.id
-                          ? "Ending..."
-                          : "End Poll"}
-                      </button>
-                    )}
-
-                    <button
-                      className="text-button share-poll-button"
-                      type="button"
-                      onClick={() => setSelectedPoll(poll)}
-                    >
-                      <Share2 size={15} />
-                      Share
-                    </button>
-
-                    <button
-                      className="text-button"
-                      type="button"
-                      onClick={() => onViewPoll(poll)}
-                    >
-                      View Poll <ArrowUpRight size={15} />
-                    </button>
+                  <div className="ap-schedule-item">
+                    <Clock3 size={15} />
+                    <span className="ap-schedule-label">Ends</span>
+                    <strong>
+                      {endDate || "No end date"}
+                    </strong>
                   </div>
+                </div>
+
+                {/* Actions */}
+                <div className="ap-card-actions">
+                  {!isEnded && poll.status === "active" && (
+                    <button
+                      className="ap-action-button ap-end-button"
+                      type="button"
+                      onClick={() => handleEndPoll(poll)}
+                      disabled={endingPollId === poll.id}
+                    >
+                      <SquareStop size={15} />
+                      {endingPollId === poll.id
+                        ? "Ending..."
+                        : "End Poll"}
+                    </button>
+                  )}
+
+                  <button
+                    className="ap-action-button"
+                    type="button"
+                    onClick={() => setSelectedPoll(poll)}
+                  >
+                    <Share2 size={16} />
+                    Share
+                  </button>
+
+                  <button
+                    className="ap-action-button ap-view-button"
+                    type="button"
+                    onClick={() => onViewPoll(poll)}
+                  >
+                    <BarChart3 size={16} />
+                    View Poll
+                    <ArrowUpRight size={15} />
+                  </button>
                 </div>
               </article>
             );
