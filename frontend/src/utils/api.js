@@ -1,9 +1,9 @@
 
 const TOKEN_KEY = "pulsepoll_token";
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_URL || ""
-).replace(/\/+$/, "");
+// Production backend URL comes from Vercel environment variables.
+// Local development continues using the Vite proxy.
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -17,13 +17,13 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// Convert relative API paths into the deployed backend URL.
 export function getApiUrl(url) {
-  // Don't modify URLs that are already absolute.
-  if (url.startsWith("http://") || url.startsWith("https://")) {
+  if (/^https?:\/\//i.test(url)) {
     return url;
   }
 
-  return `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+  return `${API_BASE_URL}${url.startsWith("/") ? url : `/${url}`}`;
 }
 
 export async function apiFetch(url, options = {}) {
@@ -46,6 +46,7 @@ export async function apiFetch(url, options = {}) {
   const response = await fetch(getApiUrl(url), {
     ...options,
     headers,
+    cache: "no-store",
   });
 
   if (response.status === 401) {
