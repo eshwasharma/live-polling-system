@@ -1,6 +1,6 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { apiFetch } from "../utils/api";
+import { apiFetch, getApiUrl } from "../utils/api";
 import {
   ArrowLeft,
   BarChart3,
@@ -68,8 +68,9 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setIsRefreshing(true);
 
     try {
-      const response = await apiFetch(
-  `/api/polls/${pollId}/results`
+     const response = await apiFetch(
+  getApiUrl(`/api/polls/${pollId}/results`),
+  { cache: "no-store" }
 );
 
       const data = await response.json();
@@ -105,8 +106,9 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setParticipantsLoading(true);
 
     try {
-      const response = await apiFetch(
-  `/api/polls/${pollId}/participants`
+     const response = await apiFetch(
+  getApiUrl(`/api/polls/${pollId}/participants`),
+  { cache: "no-store" }
 );
 
       const data = await response.json();
