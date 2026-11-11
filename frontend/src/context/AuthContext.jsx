@@ -12,9 +12,28 @@ import {
   clearToken,
   getToken,
   saveToken,
+  getApiUrl,
 } from "../utils/api";
 
 const AuthContext = createContext(null);
+
+async function readResponse(response) {
+  const text = await response.text();
+
+  if (!text) {
+    throw new Error(
+      `Server returned an empty response (${response.status}).`
+    );
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Server returned an invalid response (${response.status}). Check the API URL and backend.`
+    );
+  }
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -34,7 +53,7 @@ export function AuthProvider({ children }) {
 
     try {
       const response = await apiFetch("/api/auth/me");
-      const data = await response.json();
+      const data = await readResponse(response);
 
       if (!response.ok || !data.success) {
         logout();
@@ -73,7 +92,7 @@ export function AuthProvider({ children }) {
   }, [logout]);
 
   const authenticate = async (endpoint, details) => {
-    const response = await fetch(endpoint, {
+    const response = await fetch(getApiUrl(endpoint), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -81,10 +100,14 @@ export function AuthProvider({ children }) {
       body: JSON.stringify(details),
     });
 
-    const data = await response.json();
+    const data = await readResponse(response);
 
     if (!response.ok || !data.success) {
       throw new Error(data.message || "Authentication failed");
+    }
+
+    if (!data.token) {
+      throw new Error("Login succeeded but the server did not return a token.");
     }
 
     saveToken(data.token);
