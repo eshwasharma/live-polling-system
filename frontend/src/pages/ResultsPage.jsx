@@ -68,9 +68,9 @@ function ResultsPage({ poll, onBack, canViewResults }) {
     if (showLoading) setIsRefreshing(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/polls/${pollId}/results`
-      );
+      const response = await apiFetch(
+  `/api/polls/${pollId}/results`
+);
 
       const data = await response.json();
 
@@ -106,8 +106,8 @@ function ResultsPage({ poll, onBack, canViewResults }) {
 
     try {
       const response = await apiFetch(
-        `${API_BASE_URL}/api/polls/${pollId}/participants`
-      );
+  `/api/polls/${pollId}/participants`
+);
 
       const data = await response.json();
 
