@@ -17,24 +17,6 @@ import {
 
 const AuthContext = createContext(null);
 
-async function readResponse(response) {
-  const text = await response.text();
-
-  if (!text) {
-    throw new Error(
-      `Server returned an empty response (${response.status}).`
-    );
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      `Server returned an invalid response (${response.status}). Check the API URL and backend.`
-    );
-  }
-}
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -53,7 +35,7 @@ export function AuthProvider({ children }) {
 
     try {
       const response = await apiFetch("/api/auth/me");
-      const data = await readResponse(response);
+      const data = await response.json();
 
       if (!response.ok || !data.success) {
         logout();
@@ -100,14 +82,10 @@ export function AuthProvider({ children }) {
       body: JSON.stringify(details),
     });
 
-    const data = await readResponse(response);
+    const data = await response.json();
 
     if (!response.ok || !data.success) {
       throw new Error(data.message || "Authentication failed");
-    }
-
-    if (!data.token) {
-      throw new Error("Login succeeded but the server did not return a token.");
     }
 
     saveToken(data.token);
